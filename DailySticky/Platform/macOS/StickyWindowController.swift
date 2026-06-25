@@ -22,6 +22,7 @@ final class StickyWindowController: NSObject, NSWindowDelegate {
         self.appState = appState
         super.init()
         observePinState()
+        observeOpacity()
     }
 
     func show() {
@@ -66,6 +67,7 @@ final class StickyWindowController: NSObject, NSWindowDelegate {
         window.standardWindowButton(.zoomButton)?.isHidden = true
 
         PinWindowService.apply(isPinned: appState.isPinned, to: window)
+        window.alphaValue = appState.noteOpacity
         return window
     }
 
@@ -74,6 +76,16 @@ final class StickyWindowController: NSObject, NSWindowDelegate {
             .sink { [weak self] isPinned in
                 Task { @MainActor in
                     self?.applyPinState(isPinned)
+                }
+            }
+            .store(in: &cancellables)
+    }
+
+    private func observeOpacity() {
+        appState.$noteOpacity
+            .sink { [weak self] noteOpacity in
+                Task { @MainActor in
+                    self?.window?.alphaValue = noteOpacity
                 }
             }
             .store(in: &cancellables)

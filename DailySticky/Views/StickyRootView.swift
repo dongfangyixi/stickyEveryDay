@@ -4,22 +4,24 @@ struct StickyRootView: View {
     @EnvironmentObject private var appState: AppState
 
     var body: some View {
+        let palette = appState.themePalette
+
         VStack(spacing: 0) {
             DateHeaderView()
 
             Divider()
-                .overlay(AppTheme.separator)
+                .overlay(palette.separator)
 
             DailyNoteEditorView()
         }
         .frame(minWidth: 320, minHeight: 280)
-        .background(AppTheme.paper)
+        .background(palette.paper)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(AppTheme.separator, lineWidth: 1)
+                .stroke(palette.separator, lineWidth: 1)
         )
         .background(Color.clear)
-        .foregroundStyle(AppTheme.text)
+        .foregroundStyle(palette.text)
     }
 }

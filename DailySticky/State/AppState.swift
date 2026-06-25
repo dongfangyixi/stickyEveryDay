@@ -11,6 +11,8 @@ final class AppState: ObservableObject {
     @Published private(set) var data: AppData
     @Published private(set) var currentDateKey: String
     @Published private(set) var isPinned: Bool
+    @Published private(set) var theme: AppThemeKind
+    @Published private(set) var noteOpacity: Double
     @Published var lastErrorMessage: String?
 
     private let dataStore: AppDataStore
@@ -36,6 +38,10 @@ final class AppState: ObservableObject {
 
     var dataFilePath: String {
         dataStore.dataFileURL.path
+    }
+
+    var themePalette: AppTheme.Palette {
+        AppTheme.palette(for: theme)
     }
 
     init(
@@ -73,6 +79,8 @@ final class AppState: ObservableObject {
         self.data = loadedData
         self.currentDateKey = dateKeyToOpen
         self.isPinned = loadedData.settings.isPinned
+        self.theme = loadedData.settings.theme
+        self.noteOpacity = loadedData.settings.noteOpacity
         self.lastErrorMessage = loadWarning
         self.dataStore = dataStore
         self.dateKeyService = dateKeyService
@@ -129,6 +137,24 @@ final class AppState: ObservableObject {
         }
     }
 
+    func updatePinned(_ isPinned: Bool) {
+        mutateData(saveMode: .immediate) { data in
+            data.settings.isPinned = isPinned
+        }
+    }
+
+    func updateTheme(_ theme: AppThemeKind) {
+        mutateData(saveMode: .immediate) { data in
+            data.settings.theme = theme
+        }
+    }
+
+    func updateNoteOpacity(_ noteOpacity: Double) {
+        mutateData(saveMode: .debounced) { data in
+            data.settings.noteOpacity = AppSettings.clampedOpacity(noteOpacity)
+        }
+    }
+
     func updateWindowFrame(_ frame: StoredWindowFrame) {
         data.settings.windowFrame = frame
         saveDebounced()
@@ -143,6 +169,8 @@ final class AppState: ObservableObject {
         objectWillChange.send()
         mutation(&data)
         isPinned = data.settings.isPinned
+        theme = data.settings.theme
+        noteOpacity = data.settings.noteOpacity
 
         switch saveMode {
         case .debounced:

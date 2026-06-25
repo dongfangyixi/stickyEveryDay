@@ -25,7 +25,10 @@ struct DailyNoteEditorView: View {
     @EnvironmentObject private var appState: AppState
 
     var body: some View {
+        let palette = appState.themePalette
+
         InlineTodoTextEditor(
+            palette: palette,
             text: Binding(
                 get: {
                     appState.currentPage.noteText
@@ -37,7 +40,7 @@ struct DailyNoteEditorView: View {
         )
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(AppTheme.paperInset.opacity(0.76))
+                .fill(palette.paperInset.opacity(0.76))
         )
         .padding(.horizontal, 8)
         .padding(.vertical, 10)
@@ -45,6 +48,7 @@ struct DailyNoteEditorView: View {
 }
 
 private struct InlineTodoTextEditor: NSViewRepresentable {
+    var palette: AppTheme.Palette
     @Binding var text: String
 
     func makeCoordinator() -> Coordinator {
@@ -52,7 +56,7 @@ private struct InlineTodoTextEditor: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> InlineTodoTextEditorContainer {
-        let view = InlineTodoTextEditorContainer()
+        let view = InlineTodoTextEditorContainer(palette: palette)
         view.onTextChange = { [coordinator = context.coordinator] newText in
             coordinator.text.wrappedValue = newText
         }
@@ -62,6 +66,7 @@ private struct InlineTodoTextEditor: NSViewRepresentable {
 
     func updateNSView(_ nsView: InlineTodoTextEditorContainer, context: Context) {
         context.coordinator.text = $text
+        nsView.setTheme(palette)
 
         if nsView.text != text {
             nsView.setText(text)
@@ -138,11 +143,12 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     private let textView = TodoTextView()
     private let overlayView = TodoCheckboxOverlayView()
     private let baseFont = NSFont.systemFont(ofSize: 14)
-    private let baseTextColor = NSColor(calibratedRed: 0.17, green: 0.14, blue: 0.10, alpha: 1)
+    private var palette: AppTheme.Palette
     private var lineKinds: [LineKind] = [.normal]
     private var isApplyingProgrammaticChange = false
     private var isRestoringUndoSnapshot = false
     private var preservesEmptyStructuredLine = false
+    private var preservesEmptyStructuredLineOnNextTextChange = false
     private var pendingUndoSnapshot: EditorSnapshot?
 
     var onTextChange: ((String) -> Void)?
@@ -151,14 +157,26 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         markdownText()
     }
 
-    override init(frame frameRect: NSRect) {
+    init(frame frameRect: NSRect = .zero, palette: AppTheme.Palette = AppTheme.yellow) {
+        self.palette = palette
         super.init(frame: frameRect)
         configureViews()
     }
 
     required init?(coder: NSCoder) {
+        self.palette = AppTheme.yellow
         super.init(coder: coder)
         configureViews()
+    }
+
+    func setTheme(_ palette: AppTheme.Palette) {
+        guard self.palette != palette else {
+            return
+        }
+
+        self.palette = palette
+        applyTheme()
+        refreshEditor()
     }
 
     deinit {
@@ -194,6 +212,19 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
 
         let undoSnapshot = pendingUndoSnapshot
         pendingUndoSnapshot = nil
+
+        let shouldPreserveEmptyStructuredLine = preservesEmptyStructuredLineOnNextTextChange
+            && textView.string.isEmpty
+        preservesEmptyStructuredLineOnNextTextChange = false
+
+        if shouldPreserveEmptyStructuredLine {
+            preservesEmptyStructuredLine = true
+        }
+        defer {
+            if shouldPreserveEmptyStructuredLine {
+                preservesEmptyStructuredLine = false
+            }
+        }
 
         reconcileLineKinds()
         if promoteTypedMarkdownTaskIfNeeded() {
@@ -238,7 +269,7 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             return adjustIndent(by: -4)
 
         case #selector(NSResponder.deleteBackward(_:)):
-            return unwrapTaskIfNeeded()
+            return handleDeleteBackward()
 
         default:
             return false
@@ -274,13 +305,10 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         textView.usesFontPanel = false
         textView.allowsDocumentBackgroundColorChange = false
         textView.font = baseFont
-        textView.textColor = baseTextColor
-        textView.typingAttributes = baseAttributes()
         textView.defaultParagraphStyle = baseParagraphStyle()
         textView.selectedTextAttributes = [
             .backgroundColor: NSColor.selectedTextBackgroundColor
         ]
-        textView.insertionPointColor = NSColor(calibratedRed: 0.16, green: 0.34, blue: 0.42, alpha: 1)
         textView.textContainerInset = NSSize(width: 8, height: 10)
         textView.textContainer?.lineFragmentPadding = 0
         textView.isVerticallyResizable = true
@@ -289,11 +317,21 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         textView.textContainer?.widthTracksTextView = true
         textView.minSize = NSSize(width: 0, height: 0)
         textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        textView.copyHandler = { [weak self] in
+            self?.copySelectionToPasteboard() ?? false
+        }
+        textView.cutHandler = { [weak self] in
+            self?.cutSelectionToPasteboard() ?? false
+        }
+        textView.pasteHandler = { [weak self] in
+            self?.pasteMarkdownTasksFromPasteboard() ?? false
+        }
         textView.checkboxMouseDownHandler = { [weak self] event in
             self?.handleCheckboxMouseDown(event) ?? false
         }
 
         overlayView.translatesAutoresizingMaskIntoConstraints = false
+        applyTheme()
 
         scrollView.documentView = textView
         addSubview(scrollView)
@@ -316,6 +354,13 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             name: NSView.boundsDidChangeNotification,
             object: scrollView.contentView
         )
+    }
+
+    private func applyTheme() {
+        textView.textColor = palette.textNS
+        textView.insertionPointColor = palette.accentNS
+        textView.typingAttributes = baseAttributes()
+        overlayView.palette = palette
     }
 
     @objc private func visibleBoundsChanged() {
@@ -419,12 +464,20 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         return true
     }
 
-    private func unwrapTaskIfNeeded() -> Bool {
+    private func handleDeleteBackward() -> Bool {
         let selectedRange = textView.selectedRange()
         guard selectedRange.length == 0,
-              let line = lineInfo(at: selectedRange.location),
-              selectedRange.location == line.contentRange.location
+              let line = lineInfo(at: selectedRange.location)
         else {
+            return false
+        }
+
+        if shouldPreserveEmptyTaskWhenDeletingBackward(from: selectedRange, in: line) {
+            preservesEmptyStructuredLineOnNextTextChange = true
+            return false
+        }
+
+        guard selectedRange.location == line.contentRange.location else {
             return false
         }
 
@@ -437,6 +490,81 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             return true
         case .normal:
             return false
+        }
+    }
+
+    private func shouldPreserveEmptyTaskWhenDeletingBackward(
+        from selectedRange: NSRange,
+        in line: DisplayLineInfo
+    ) -> Bool {
+        guard selectedRange.location > line.contentRange.location,
+              selectedRange.location <= NSMaxRange(line.contentRange),
+              line.contentRange.length == 1,
+              (textView.string as NSString).length == 1,
+              kind(at: line.index).isStructured
+        else {
+            return false
+        }
+
+        return true
+    }
+
+    private func copySelectionToPasteboard() -> Bool {
+        let selectedRange = textView.selectedRange()
+        guard selectedRange.length > 0,
+              let markdown = markdownText(in: selectedRange)
+        else {
+            return false
+        }
+
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(markdown, forType: .string)
+        return true
+    }
+
+    private func cutSelectionToPasteboard() -> Bool {
+        let selectedRange = textView.selectedRange()
+        guard selectedRange.length > 0,
+              copySelectionToPasteboard()
+        else {
+            return false
+        }
+
+        return applyTextStorageEdit(
+            range: selectedRange,
+            replacement: "",
+            selectedRange: NSRange(location: selectedRange.location, length: 0)
+        ) {
+            if isFullTextRange(selectedRange) {
+                lineKinds = [.normal]
+            }
+        }
+    }
+
+    private func pasteMarkdownTasksFromPasteboard() -> Bool {
+        guard let pastedText = NSPasteboard.general.string(forType: .string),
+              Self.containsTaskMarkdown(in: pastedText)
+        else {
+            return false
+        }
+
+        let selectedRange = textView.selectedRange()
+        let document = Self.displayDocument(from: pastedText)
+        let replacementLength = (document.text as NSString).length
+        let replacesWholeDocument = isFullTextRange(selectedRange)
+            || ((textView.string as NSString).length == 0 && selectedRange.length == 0)
+
+        return applyTextStorageEdit(
+            range: selectedRange,
+            replacement: document.text,
+            selectedRange: NSRange(location: selectedRange.location + replacementLength, length: 0)
+        ) {
+            if replacesWholeDocument {
+                lineKinds = document.lineKinds
+            } else {
+                replaceLineKindsForPaste(in: selectedRange, with: document.lineKinds)
+            }
         }
     }
 
@@ -616,6 +744,83 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         refreshOverlay()
     }
 
+    private func isFullTextRange(_ range: NSRange) -> Bool {
+        range.location == 0 && range.length == (textView.string as NSString).length
+    }
+
+    private func markdownText(in selectedRange: NSRange) -> String? {
+        guard selectedRange.length > 0 else {
+            return nil
+        }
+
+        if isFullTextRange(selectedRange) {
+            return markdownText()
+        }
+
+        var markdownLines: [String] = []
+        let nsText = textView.string as NSString
+
+        for line in lineInfos() {
+            guard let intersection = line.contentRange.intersection(selectedRange) else {
+                if selectedRange.contains(line.lineRange.location),
+                   line.contentRange.length == 0 {
+                    markdownLines.append(markdownLinePrefix(for: kind(at: line.index)))
+                }
+                continue
+            }
+
+            let selectedText = nsText.substring(with: intersection)
+            let includesLineStart = selectedRange.location <= line.contentRange.location
+            let prefix = includesLineStart ? markdownLinePrefix(for: kind(at: line.index)) : ""
+            markdownLines.append(prefix + selectedText)
+        }
+
+        guard !markdownLines.isEmpty else {
+            return nil
+        }
+
+        return markdownLines.joined(separator: "\n")
+    }
+
+    private func markdownLinePrefix(for kind: LineKind) -> String {
+        switch kind {
+        case .normal:
+            return ""
+        case .task(let indentColumns, let isCompleted):
+            return String(repeating: " ", count: indentColumns) + (isCompleted ? "- [x] " : "- [ ] ")
+        case .continuation(let indentColumns):
+            return String(repeating: " ", count: indentColumns + 6)
+        }
+    }
+
+    private func replaceLineKindsForPaste(in selectedRange: NSRange, with replacementKinds: [LineKind]) {
+        let textLength = (textView.string as NSString).length
+        lineKinds = normalizedLineKinds(lineKinds, for: textView.string)
+
+        guard !replacementKinds.isEmpty else {
+            return
+        }
+
+        if textLength == 0 {
+            lineKinds = replacementKinds
+            return
+        }
+
+        let startLine = lineInfo(at: selectedRange.location)?.index ?? 0
+        let removedLineCount: Int
+        if selectedRange.length == 0 {
+            removedLineCount = 0
+        } else {
+            let endLocation = max(selectedRange.location, NSMaxRange(selectedRange) - 1)
+            let endLine = lineInfo(at: endLocation)?.index ?? startLine
+            removedLineCount = max(1, endLine - startLine + 1)
+        }
+
+        let safeStart = min(startLine, lineKinds.count)
+        let safeEnd = min(lineKinds.count, safeStart + removedLineCount)
+        lineKinds.replaceSubrange(safeStart..<safeEnd, with: replacementKinds)
+    }
+
     private func refreshOverlay() {
         overlayView.setItems([])
 
@@ -677,9 +882,9 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         }
 
         let selectedRange = textView.selectedRange()
-        let completedColor = NSColor(calibratedRed: 0.50, green: 0.46, blue: 0.38, alpha: 1)
-        let codeBackground = NSColor(calibratedRed: 1.0, green: 0.92, blue: 0.62, alpha: 0.72)
-        let strikethroughColor = NSColor(calibratedRed: 0.43, green: 0.37, blue: 0.30, alpha: 1)
+        let completedColor = palette.completedTextNS
+        let codeBackground = palette.codeBackgroundNS
+        let strikethroughColor = palette.strikethroughNS
 
         textStorage.beginEditing()
         if fullRange.length > 0 {
@@ -817,7 +1022,7 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     private func baseAttributes() -> [NSAttributedString.Key: Any] {
         [
             .font: baseFont,
-            .foregroundColor: baseTextColor,
+            .foregroundColor: palette.textNS,
             .paragraphStyle: baseParagraphStyle()
         ]
     }
@@ -1137,6 +1342,10 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         return typedTaskSeparatorRegex.firstMatch(in: line, range: range) != nil
     }
 
+    private static func containsTaskMarkdown(in text: String) -> Bool {
+        text.components(separatedBy: "\n").contains { parseTaskLine($0) != nil }
+    }
+
     private static func indentColumns(in indentation: String) -> Int {
         indentation.reduce(0) { partialResult, character in
             partialResult + (character == "\t" ? 4 : 1)
@@ -1153,6 +1362,9 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
 }
 
 private final class TodoTextView: NSTextView {
+    var copyHandler: (() -> Bool)?
+    var cutHandler: (() -> Bool)?
+    var pasteHandler: (() -> Bool)?
     var checkboxMouseDownHandler: ((NSEvent) -> Bool)?
     var checkboxCursorRects: [NSRect] = [] {
         didSet {
@@ -1160,6 +1372,30 @@ private final class TodoTextView: NSTextView {
         }
     }
     private var checkboxTrackingArea: NSTrackingArea?
+
+    override func copy(_ sender: Any?) {
+        if copyHandler?() == true {
+            return
+        }
+
+        super.copy(sender)
+    }
+
+    override func cut(_ sender: Any?) {
+        if cutHandler?() == true {
+            return
+        }
+
+        super.cut(sender)
+    }
+
+    override func paste(_ sender: Any?) {
+        if pasteHandler?() == true {
+            return
+        }
+
+        super.paste(sender)
+    }
 
     override func keyDown(with event: NSEvent) {
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
@@ -1233,10 +1469,12 @@ private struct TodoCheckboxOverlayItem {
 }
 
 private final class TodoCheckboxOverlayView: NSView {
-    private let checkedFillColor = NSColor(calibratedRed: 0.13, green: 0.36, blue: 0.42, alpha: 1)
-    private let uncheckedFillColor = NSColor(calibratedWhite: 1.0, alpha: 0.82)
-    private let borderColor = NSColor(calibratedRed: 0.40, green: 0.35, blue: 0.20, alpha: 0.56)
-    private let checkmarkColor = NSColor.white
+    var palette: AppTheme.Palette = AppTheme.yellow {
+        didSet {
+            needsDisplay = true
+        }
+    }
+
     private var items: [TodoCheckboxOverlayItem] = []
 
     override var isFlipped: Bool {
@@ -1289,10 +1527,10 @@ private final class TodoCheckboxOverlayView: NSView {
         )
 
         let boxPath = NSBezierPath(roundedRect: boxRect, xRadius: 3.5, yRadius: 3.5)
-        (item.isChecked ? checkedFillColor : uncheckedFillColor).setFill()
+        (item.isChecked ? palette.accentNS : palette.checkboxUncheckedNS).setFill()
         boxPath.fill()
 
-        borderColor.setStroke()
+        palette.checkboxBorderNS.setStroke()
         boxPath.lineWidth = 1.5
         boxPath.stroke()
 
@@ -1304,7 +1542,7 @@ private final class TodoCheckboxOverlayView: NSView {
         checkPath.move(to: NSPoint(x: boxRect.minX + 4, y: boxRect.midY + 0.5))
         checkPath.line(to: NSPoint(x: boxRect.minX + 7, y: boxRect.maxY - 4))
         checkPath.line(to: NSPoint(x: boxRect.maxX - 3.5, y: boxRect.minY + 4))
-        checkmarkColor.setStroke()
+        palette.checkboxCheckmarkNS.setStroke()
         checkPath.lineWidth = 2.2
         checkPath.lineCapStyle = .round
         checkPath.lineJoinStyle = .round

@@ -4,13 +4,15 @@ struct DateHeaderView: View {
     @EnvironmentObject private var appState: AppState
 
     var body: some View {
+        let palette = appState.themePalette
+
         HStack(spacing: 8) {
             Button {
                 appState.goToPreviousDay()
             } label: {
                 Image(systemName: "chevron.left")
             }
-            .buttonStyle(StickyIconButtonStyle())
+            .buttonStyle(StickyIconButtonStyle(palette: palette))
             .help("Previous day")
 
             ViewThatFits(in: .horizontal) {
@@ -38,7 +40,7 @@ struct DateHeaderView: View {
                         }
                     }
                 }
-                .buttonStyle(StickyTextButtonStyle())
+                .buttonStyle(StickyTextButtonStyle(palette: palette))
                 .accessibilityLabel("Back to Today")
                 .help("Back to today")
             }
@@ -48,7 +50,7 @@ struct DateHeaderView: View {
             } label: {
                 Image(systemName: "chevron.right")
             }
-            .buttonStyle(StickyIconButtonStyle())
+            .buttonStyle(StickyIconButtonStyle(palette: palette))
             .help("Next day")
 
             WindowControlsView()
