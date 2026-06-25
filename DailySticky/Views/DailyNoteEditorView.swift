@@ -99,6 +99,15 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
 
             return false
         }
+
+        var isStructured: Bool {
+            switch self {
+            case .normal:
+                return false
+            case .task, .continuation:
+                return true
+            }
+        }
     }
 
     private struct DisplayDocument {
@@ -113,6 +122,18 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         var text: String
     }
 
+    private struct EditorSnapshot {
+        var text: String
+        var lineKinds: [LineKind]
+        var selectedRange: NSRange
+
+        func isSame(as other: EditorSnapshot) -> Bool {
+            text == other.text
+                && lineKinds == other.lineKinds
+                && NSEqualRanges(selectedRange, other.selectedRange)
+        }
+    }
+
     private let scrollView = NSScrollView()
     private let textView = TodoTextView()
     private let overlayView = TodoCheckboxOverlayView()
@@ -120,7 +141,9 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     private let baseTextColor = NSColor(calibratedRed: 0.17, green: 0.14, blue: 0.10, alpha: 1)
     private var lineKinds: [LineKind] = [.normal]
     private var isApplyingProgrammaticChange = false
+    private var isRestoringUndoSnapshot = false
     private var preservesEmptyStructuredLine = false
+    private var pendingUndoSnapshot: EditorSnapshot?
 
     var onTextChange: ((String) -> Void)?
 
@@ -143,6 +166,8 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     }
 
     func setText(_ text: String) {
+        clearEditorUndoHistory()
+        pendingUndoSnapshot = nil
         let document = Self.displayDocument(from: text)
         lineKinds = document.lineKinds
 
@@ -167,12 +192,17 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             return
         }
 
+        let undoSnapshot = pendingUndoSnapshot
+        pendingUndoSnapshot = nil
+
         reconcileLineKinds()
         if promoteTypedMarkdownTaskIfNeeded() {
+            registerUndoSnapshotIfChanged(from: undoSnapshot)
             return
         }
 
         notifyTextChangedAndRefresh(scrollSelection: true)
+        registerUndoSnapshotIfChanged(from: undoSnapshot)
     }
 
     func textViewDidChangeSelection(_ notification: Notification) {
@@ -184,7 +214,11 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         shouldChangeTextIn affectedCharRange: NSRange,
         replacementString: String?
     ) -> Bool {
-        true
+        if !isApplyingProgrammaticChange && !isRestoringUndoSnapshot && pendingUndoSnapshot == nil {
+            pendingUndoSnapshot = editorSnapshot()
+        }
+
+        return true
     }
 
     func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
@@ -235,7 +269,7 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false
         textView.isAutomaticTextReplacementEnabled = false
-        textView.allowsUndo = true
+        textView.allowsUndo = false
         textView.importsGraphics = false
         textView.usesFontPanel = false
         textView.allowsDocumentBackgroundColorChange = false
@@ -306,8 +340,10 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
 
         case .continuation(let indentColumns):
             if line.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                let undoSnapshot = editorSnapshot()
                 lineKinds[line.index] = .task(indentColumns: indentColumns, isCompleted: false)
                 notifyTextChangedAndRefresh(scrollSelection: true)
+                registerUndoSnapshotIfChanged(from: undoSnapshot)
                 return true
             }
 
@@ -365,6 +401,7 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             return false
         }
 
+        let undoSnapshot = editorSnapshot()
         switch kind(at: line.index) {
         case .task(let indentColumns, let isCompleted):
             lineKinds[line.index] = .task(
@@ -378,6 +415,7 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         }
 
         notifyTextChangedAndRefresh(scrollSelection: true)
+        registerUndoSnapshotIfChanged(from: undoSnapshot)
         return true
     }
 
@@ -392,8 +430,10 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
 
         switch kind(at: line.index) {
         case .task, .continuation:
+            let undoSnapshot = editorSnapshot()
             lineKinds[line.index] = .normal
             notifyTextChangedAndRefresh(scrollSelection: true)
+            registerUndoSnapshotIfChanged(from: undoSnapshot)
             return true
         case .normal:
             return false
@@ -450,11 +490,13 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         selectedRange: NSRange,
         updateLineKinds: () -> Void
     ) -> Bool {
+        let undoSnapshot = editorSnapshot()
+        isApplyingProgrammaticChange = true
         guard textView.shouldChangeText(in: range, replacementString: replacement) else {
+            isApplyingProgrammaticChange = false
             return true
         }
 
-        isApplyingProgrammaticChange = true
         textView.textStorage?.replaceCharacters(in: range, with: replacement)
         updateLineKinds()
         reconcileLineKinds()
@@ -462,6 +504,7 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         textView.didChangeText()
         isApplyingProgrammaticChange = false
         notifyTextChangedAndRefresh(scrollSelection: true)
+        registerUndoSnapshotIfChanged(from: undoSnapshot)
         return true
     }
 
@@ -475,9 +518,82 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             return false
         }
 
+        let undoSnapshot = editorSnapshot()
         lineKinds[lineIndex] = .task(indentColumns: indentColumns, isCompleted: !isCompleted)
         notifyTextChangedAndRefresh(scrollSelection: false)
+        registerUndoSnapshotIfChanged(from: undoSnapshot)
         return true
+    }
+
+    private func editorSnapshot() -> EditorSnapshot {
+        EditorSnapshot(
+            text: textView.string,
+            lineKinds: lineKinds,
+            selectedRange: textView.selectedRange()
+        )
+    }
+
+    private func clearEditorUndoHistory() {
+        snapshotUndoManager?.removeAllActions(withTarget: self)
+    }
+
+    private var snapshotUndoManager: UndoManager? {
+        textView.undoManager ?? window?.undoManager
+    }
+
+    private func registerUndoSnapshotIfChanged(from undoSnapshot: EditorSnapshot?) {
+        guard let undoSnapshot,
+              !isRestoringUndoSnapshot,
+              !undoSnapshot.isSame(as: editorSnapshot())
+        else {
+            return
+        }
+
+        registerUndoRestore(to: undoSnapshot)
+    }
+
+    private func registerUndoRestore(to snapshot: EditorSnapshot) {
+        snapshotUndoManager?.registerUndo(withTarget: self) { target in
+            target.restoreUndoSnapshot(snapshot)
+        }
+    }
+
+    private func restoreUndoSnapshot(_ snapshot: EditorSnapshot) {
+        let redoSnapshot = editorSnapshot()
+        isRestoringUndoSnapshot = true
+        applyEditorSnapshot(snapshot)
+        isRestoringUndoSnapshot = false
+        registerUndoRestore(to: redoSnapshot)
+    }
+
+    private func applyEditorSnapshot(_ snapshot: EditorSnapshot) {
+        let shouldPreserveEmptyStructuredLine = snapshot.text.isEmpty
+            && snapshot.lineKinds.first?.isStructured == true
+
+        if shouldPreserveEmptyStructuredLine {
+            preservesEmptyStructuredLine = true
+        }
+        defer {
+            if shouldPreserveEmptyStructuredLine {
+                preservesEmptyStructuredLine = false
+            }
+        }
+
+        isApplyingProgrammaticChange = true
+        textView.textStorage?.setAttributedString(
+            NSAttributedString(string: snapshot.text, attributes: baseAttributes())
+        )
+        lineKinds = normalizedLineKinds(snapshot.lineKinds, for: snapshot.text)
+        let textLength = (snapshot.text as NSString).length
+        let selectedLocation = max(0, min(snapshot.selectedRange.location, textLength))
+        textView.setSelectedRange(
+            NSRange(
+                location: selectedLocation,
+                length: min(snapshot.selectedRange.length, max(0, textLength - selectedLocation))
+            )
+        )
+        isApplyingProgrammaticChange = false
+        notifyTextChangedAndRefresh(scrollSelection: true)
     }
 
     private func notifyTextChangedAndRefresh(scrollSelection: Bool) {
@@ -812,16 +928,27 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             return
         }
 
-        let lineCount = displayLines().count
-        if lineKinds.count < lineCount {
-            lineKinds.append(contentsOf: Array(repeating: .normal, count: lineCount - lineKinds.count))
-        } else if lineKinds.count > lineCount {
-            lineKinds.removeLast(lineKinds.count - lineCount)
-        }
+        lineKinds = normalizedLineKinds(lineKinds, for: textView.string)
 
         if lineKinds.isEmpty {
             lineKinds = [.normal]
         }
+    }
+
+    private func normalizedLineKinds(_ kinds: [LineKind], for text: String) -> [LineKind] {
+        let lineCount = text.components(separatedBy: "\n").count
+        var result = kinds
+        if result.count < lineCount {
+            result.append(contentsOf: Array(repeating: .normal, count: lineCount - result.count))
+        } else if result.count > lineCount {
+            result.removeLast(result.count - lineCount)
+        }
+
+        if result.isEmpty {
+            return [.normal]
+        }
+
+        return result
     }
 
     private func displayLines() -> [String] {
@@ -1033,6 +1160,28 @@ private final class TodoTextView: NSTextView {
         }
     }
     private var checkboxTrackingArea: NSTrackingArea?
+
+    override func keyDown(with event: NSEvent) {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        guard event.charactersIgnoringModifiers?.lowercased() == "z",
+              flags.contains(.command) || flags.contains(.control)
+        else {
+            super.keyDown(with: event)
+            return
+        }
+
+        let manager = undoManager ?? window?.undoManager
+        if flags.contains(.shift) {
+            if manager?.canRedo == true {
+                manager?.redo()
+            }
+            return
+        }
+
+        if manager?.canUndo == true {
+            manager?.undo()
+        }
+    }
 
     override func mouseDown(with event: NSEvent) {
         if checkboxMouseDownHandler?(event) == true {
