@@ -120,6 +120,7 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     private let baseTextColor = NSColor(calibratedRed: 0.17, green: 0.14, blue: 0.10, alpha: 1)
     private var lineKinds: [LineKind] = [.normal]
     private var isApplyingProgrammaticChange = false
+    private var preservesEmptyStructuredLine = false
 
     var onTextChange: ((String) -> Void)?
 
@@ -167,6 +168,10 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         }
 
         reconcileLineKinds()
+        if promoteTypedMarkdownTaskIfNeeded() {
+            return
+        }
+
         notifyTextChangedAndRefresh(scrollSelection: true)
     }
 
@@ -393,6 +398,50 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         case .normal:
             return false
         }
+    }
+
+    private func promoteTypedMarkdownTaskIfNeeded() -> Bool {
+        let selectedRange = textView.selectedRange()
+        guard selectedRange.length == 0,
+              let line = lineInfo(at: selectedRange.location),
+              kind(at: line.index) == .normal,
+              Self.hasTypedTaskSeparator(in: line.text),
+              let task = Self.parseTaskLine(line.text)
+        else {
+            return false
+        }
+
+        let oldLineLength = (line.text as NSString).length
+        let newLineLength = (task.text as NSString).length
+        let removedPrefixLength = oldLineLength - newLineLength
+        let selectionOffset = selectedRange.location - line.contentRange.location
+        let newSelectionOffset = max(0, min(newLineLength, selectionOffset - removedPrefixLength))
+
+        let shouldPreserveEmptyTaskLine = task.text.isEmpty
+        if shouldPreserveEmptyTaskLine {
+            preservesEmptyStructuredLine = true
+        }
+        defer {
+            if shouldPreserveEmptyTaskLine {
+                preservesEmptyStructuredLine = false
+            }
+        }
+
+        isApplyingProgrammaticChange = true
+        textView.textStorage?.replaceCharacters(in: line.contentRange, with: task.text)
+        lineKinds[line.index] = .task(
+            indentColumns: task.indentColumns,
+            isCompleted: task.isCompleted
+        )
+        reconcileLineKinds()
+        textView.setSelectedRange(
+            NSRange(location: line.contentRange.location + newSelectionOffset, length: 0)
+        )
+        textView.didChangeText()
+        isApplyingProgrammaticChange = false
+
+        notifyTextChangedAndRefresh(scrollSelection: true)
+        return true
     }
 
     private func applyTextStorageEdit(
@@ -758,6 +807,11 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     }
 
     private func reconcileLineKinds() {
+        if textView.string.isEmpty && !preservesEmptyStructuredLine {
+            lineKinds = [.normal]
+            return
+        }
+
         let lineCount = displayLines().count
         if lineKinds.count < lineCount {
             lineKinds.append(contentsOf: Array(repeating: .normal, count: lineCount - lineKinds.count))
@@ -950,6 +1004,12 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         )
     }
 
+    private static func hasTypedTaskSeparator(in line: String) -> Bool {
+        let nsLine = line as NSString
+        let range = NSRange(location: 0, length: nsLine.length)
+        return typedTaskSeparatorRegex.firstMatch(in: line, range: range) != nil
+    }
+
     private static func indentColumns(in indentation: String) -> Int {
         indentation.reduce(0) { partialResult, character in
             partialResult + (character == "\t" ? 4 : 1)
@@ -958,6 +1018,10 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
 
     private static let taskLineRegex = try! NSRegularExpression(
         pattern: #"^([ \t]*)[-*+][ \t]+(\[[ xX]\])[ \t]*(.*)$"#
+    )
+
+    private static let typedTaskSeparatorRegex = try! NSRegularExpression(
+        pattern: #"^[ \t]*[-*+][ \t]+\[[ xX]\][ \t]+.*$"#
     )
 }
 
