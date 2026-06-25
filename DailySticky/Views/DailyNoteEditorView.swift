@@ -132,8 +132,17 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
         switch commandSelector {
         case #selector(NSResponder.insertLineBreak(_:)):
+            if NSApp.currentEvent?.modifierFlags.contains(.shift) == true {
+                return applyTextEdit(
+                    MarkdownTaskParser.softLineBreakEdit(
+                        in: textView.string,
+                        selectedRange: textView.selectedRange()
+                    )
+                )
+            }
+
             return applyTextEdit(
-                MarkdownTaskParser.softLineBreakEdit(
+                MarkdownTaskParser.newlineEdit(
                     in: textView.string,
                     selectedRange: textView.selectedRange()
                 )
@@ -171,6 +180,14 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
                     in: textView.string,
                     selectedRange: textView.selectedRange(),
                     direction: .outward
+                )
+            )
+
+        case #selector(NSResponder.deleteBackward(_:)):
+            return applyTextEdit(
+                MarkdownTaskParser.unwrapTaskEdit(
+                    in: textView.string,
+                    selectedRange: textView.selectedRange()
                 )
             )
 
@@ -578,6 +595,7 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         textView.didChangeText()
         textView.setSelectedRange(edit.selectedRange)
         refreshCheckboxes()
+        scrollSelectionToVisible()
         return true
     }
 
@@ -604,6 +622,30 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         textView.setSelectedRange(adjustedRange)
 
         refreshCheckboxes()
+    }
+
+    private func scrollSelectionToVisible() {
+        guard let layoutManager = textView.layoutManager,
+              let textContainer = textView.textContainer
+        else {
+            textView.scrollRangeToVisible(scrollRangeForSelection())
+            return
+        }
+
+        layoutManager.ensureLayout(for: textContainer)
+        textView.scrollRangeToVisible(scrollRangeForSelection())
+    }
+
+    private func scrollRangeForSelection() -> NSRange {
+        let selectedRange = textView.selectedRange()
+        let textLength = (textView.string as NSString).length
+
+        guard selectedRange.length == 0, textLength > 0 else {
+            return selectedRange
+        }
+
+        let location = max(0, min(selectedRange.location, textLength) - 1)
+        return NSRange(location: location, length: 1)
     }
 }
 

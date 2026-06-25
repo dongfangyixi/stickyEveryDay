@@ -212,6 +212,29 @@ enum MarkdownTaskParser {
         }
     }
 
+    static func unwrapTaskEdit(in text: String, selectedRange: NSRange) -> TextEdit? {
+        guard selectedRange.length == 0 else {
+            return nil
+        }
+
+        let nsText = text as NSString
+        guard let todoLine = taskLine(at: selectedRange.location, in: nsText),
+              selectedRange.location >= todoLine.lineRange.location,
+              selectedRange.location <= todoLine.textRange.location
+        else {
+            return nil
+        }
+
+        return TextEdit(
+            range: NSRange(
+                location: todoLine.lineRange.location,
+                length: max(0, todoLine.textRange.location - todoLine.lineRange.location)
+            ),
+            replacement: "",
+            selectedRange: NSRange(location: todoLine.lineRange.location, length: 0)
+        )
+    }
+
     static func toggleEdit(in text: String, lineLocation: Int) -> ToggleEdit? {
         let nsText = text as NSString
 
@@ -362,7 +385,8 @@ enum MarkdownTaskParser {
     }
 
     private static func continuationIndent(for line: MarkdownTaskLine) -> String {
-        line.indentation + String(repeating: " ", count: line.syntaxRange.length)
+        let markerSpacing = line.hasWhitespaceAfterMarker ? line.syntaxRange.length : line.syntaxRange.length + 1
+        return line.indentation + String(repeating: " ", count: markerSpacing)
     }
 
     private static func isContinuationLine(_ line: String, for taskLine: MarkdownTaskLine) -> Bool {
@@ -438,6 +462,6 @@ enum MarkdownTaskParser {
     private static let indentUnit = "    "
 
     private static let taskRegex = try! NSRegularExpression(
-        pattern: #"^([ \t]*)((?:[-*+])[ \t]+(\[[ xX]\])[ \t]+)(.*)$"#
+        pattern: #"^([ \t]*)((?:[-*+])[ \t]+(\[[ xX]\])[ \t]*)(.*)$"#
     )
 }
