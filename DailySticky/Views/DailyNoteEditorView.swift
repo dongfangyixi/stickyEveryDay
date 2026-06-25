@@ -691,8 +691,39 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     }
 
     private func scrollSelectionToVisible() {
-        textView.scrollRangeToVisible(scrollRangeForSelection())
+        guard scrollSelectedLineToVisible() else {
+            textView.scrollRangeToVisible(scrollRangeForSelection())
+            refreshOverlay()
+            return
+        }
+
         refreshOverlay()
+    }
+
+    @discardableResult
+    private func scrollSelectedLineToVisible() -> Bool {
+        guard let layoutManager = textView.layoutManager,
+              let textContainer = textView.textContainer,
+              let line = lineInfo(at: textView.selectedRange().location)
+        else {
+            return false
+        }
+
+        layoutManager.ensureLayout(for: textContainer)
+
+        guard var lineRect = lineFragmentRect(for: line, layoutManager: layoutManager) else {
+            return false
+        }
+
+        lineRect.origin.x = 0
+        lineRect.origin.y += textView.textContainerOrigin.y
+        lineRect.size.width = max(textView.bounds.width, scrollView.contentView.bounds.width)
+        lineRect.size.height = max(lineRect.height, lineHeight())
+
+        let bottomBreathingRoom = lineHeight() * 0.65
+        let visibleRect = lineRect.insetBy(dx: 0, dy: -bottomBreathingRoom)
+        textView.scrollToVisible(visibleRect)
+        return true
     }
 
     private func scrollRangeForSelection() -> NSRange {
