@@ -34,6 +34,7 @@ DailySticky is a small desktop sticky-note app organized by day. The sticky note
 - The canonical task syntax is `- [ ] item` and `- [x] item`.
 - Shorthand forms such as `[] item` or `- [] item` are plain text, not todos.
 - Common inline Markdown is parsed with `swift-markdown` and styled while editing: headings, `**bold**`, `*italic*`, inline code, and strikethrough.
+- Future Markdown backlog: links, blockquotes, normal bullet/ordered lists, fenced code blocks, horizontal rules, images, and tables.
 
 Example:
 
