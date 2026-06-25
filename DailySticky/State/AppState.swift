@@ -26,6 +26,10 @@ final class AppState: ObservableObject {
         dateKeyService.displayTitle(for: currentDateKey)
     }
 
+    var currentCompactDateTitle: String {
+        dateKeyService.compactDisplayTitle(for: currentDateKey)
+    }
+
     var isShowingToday: Bool {
         currentDateKey == dateKeyService.todayDateKey()
     }

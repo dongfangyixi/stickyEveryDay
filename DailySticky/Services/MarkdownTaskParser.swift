@@ -11,7 +11,19 @@ struct MarkdownTaskLine: Equatable {
     var hasWhitespaceAfterMarker: Bool
 }
 
+struct MarkdownContinuationLine: Equatable {
+    var lineRange: NSRange
+    var leadingWhitespaceRange: NSRange
+    var taskLine: MarkdownTaskLine
+}
+
 enum MarkdownTaskParser {
+    private struct ContinuationContext {
+        var taskLine: MarkdownTaskLine
+        var contentRange: NSRange
+        var lineText: String
+    }
+
     struct ToggleEdit: Equatable {
         var range: NSRange
         var replacement: String
@@ -53,24 +65,106 @@ enum MarkdownTaskParser {
         return result
     }
 
+    static func continuationLines(in text: String) -> [MarkdownContinuationLine] {
+        let nsText = text as NSString
+
+        guard nsText.length > 0 else {
+            return []
+        }
+
+        var result: [MarkdownContinuationLine] = []
+        var activeTaskLine: MarkdownTaskLine?
+        var location = 0
+
+        while location < nsText.length {
+            let lineRange = nsText.lineRange(for: NSRange(location: location, length: 0))
+            let contentRange = contentRangeWithoutNewline(from: lineRange, in: nsText)
+            let line = nsText.substring(with: contentRange)
+
+            if let taskLine = parseLine(line, contentLocation: contentRange.location, lineRange: lineRange) {
+                activeTaskLine = taskLine
+                location = NSMaxRange(lineRange)
+                continue
+            }
+
+            if let taskLine = activeTaskLine, isContinuationLine(line, for: taskLine) {
+                result.append(
+                    MarkdownContinuationLine(
+                        lineRange: lineRange,
+                        leadingWhitespaceRange: NSRange(
+                            location: contentRange.location,
+                            length: min(leadingWhitespaceLength(in: line), contentRange.length)
+                        ),
+                        taskLine: taskLine
+                    )
+                )
+            } else {
+                activeTaskLine = nil
+            }
+
+            location = NSMaxRange(lineRange)
+        }
+
+        return result
+    }
+
     static func newlineEdit(in text: String, selectedRange: NSRange) -> TextEdit? {
         guard selectedRange.length == 0 else {
             return nil
         }
 
         let nsText = text as NSString
-        guard let todoLine = taskLine(at: selectedRange.location, in: nsText),
-              selectedRange.location >= todoLine.textRange.location
+        if let todoLine = taskLine(at: selectedRange.location, in: nsText),
+           selectedRange.location >= todoLine.textRange.location {
+            return newTaskEdit(
+                at: selectedRange,
+                indentation: todoLine.indentation
+            )
+        }
+
+        guard let context = continuationContext(at: selectedRange.location, in: nsText),
+              selectedRange.location == NSMaxRange(context.contentRange)
         else {
             return nil
         }
 
-        let continuation = "\n\(todoLine.indentation)- [ ] "
+        let newTaskPrefix = "\(context.taskLine.indentation)- [ ] "
+        if context.lineText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return TextEdit(
+                range: context.contentRange,
+                replacement: newTaskPrefix,
+                selectedRange: NSRange(
+                    location: context.contentRange.location + (newTaskPrefix as NSString).length,
+                    length: 0
+                )
+            )
+        }
+
+        return newTaskEdit(
+            at: selectedRange,
+            indentation: context.taskLine.indentation
+        )
+    }
+
+    static func softLineBreakEdit(in text: String, selectedRange: NSRange) -> TextEdit? {
+        let nsText = text as NSString
+        let replacement: String
+        if selectedRange.length == 0,
+           let todoLine = taskLine(at: selectedRange.location, in: nsText),
+           selectedRange.location >= todoLine.textRange.location {
+            replacement = "\n\(continuationIndent(for: todoLine))"
+        } else if selectedRange.length == 0,
+                  let context = continuationContext(at: selectedRange.location, in: nsText) {
+            replacement = "\n\(continuationIndent(for: context.taskLine))"
+        } else {
+            replacement = "\n"
+        }
+
         return TextEdit(
             range: selectedRange,
-            replacement: continuation,
+            replacement: replacement,
             selectedRange: NSRange(
-                location: selectedRange.location + (continuation as NSString).length,
+                location: selectedRange.location + (replacement as NSString).length,
                 length: 0
             )
         )
@@ -192,6 +286,109 @@ enum MarkdownTaskParser {
         return parseLine(line, contentLocation: contentRange.location, lineRange: lineRange)
     }
 
+    private static func newTaskEdit(at selectedRange: NSRange, indentation: String) -> TextEdit {
+        let continuation = "\n\(indentation)- [ ] "
+        return TextEdit(
+            range: selectedRange,
+            replacement: continuation,
+            selectedRange: NSRange(
+                location: selectedRange.location + (continuation as NSString).length,
+                length: 0
+            )
+        )
+    }
+
+    private static func continuationContext(at location: Int, in nsText: NSString) -> ContinuationContext? {
+        guard nsText.length > 0 else {
+            return nil
+        }
+
+        let currentLineRange = lineRange(containing: location, in: nsText)
+        let currentContentRange = contentRangeWithoutNewline(from: currentLineRange, in: nsText)
+        let currentLine = nsText.substring(with: currentContentRange)
+
+        guard parseLine(currentLine, contentLocation: currentContentRange.location, lineRange: currentLineRange) == nil else {
+            return nil
+        }
+
+        var interveningLines = [currentLine]
+        var previousLineEnd = currentLineRange.location
+
+        while previousLineEnd > 0 {
+            let previousLineRange = nsText.lineRange(
+                for: NSRange(location: previousLineEnd - 1, length: 0)
+            )
+            let previousContentRange = contentRangeWithoutNewline(from: previousLineRange, in: nsText)
+            let previousLine = nsText.substring(with: previousContentRange)
+
+            if let taskLine = parseLine(
+                previousLine,
+                contentLocation: previousContentRange.location,
+                lineRange: previousLineRange
+            ) {
+                guard interveningLines.allSatisfy({ isContinuationLine($0, for: taskLine) }) else {
+                    return nil
+                }
+
+                return ContinuationContext(
+                    taskLine: taskLine,
+                    contentRange: currentContentRange,
+                    lineText: currentLine
+                )
+            }
+
+            interveningLines.append(previousLine)
+            previousLineEnd = previousLineRange.location
+        }
+
+        return nil
+    }
+
+    private static func lineRange(containing location: Int, in nsText: NSString) -> NSRange {
+        guard nsText.length > 0 else {
+            return NSRange(location: 0, length: 0)
+        }
+
+        let boundedLocation = max(0, min(location, nsText.length))
+        if boundedLocation == nsText.length,
+           boundedLocation > 0,
+           isNewline(nsText.character(at: boundedLocation - 1)) {
+            return NSRange(location: boundedLocation, length: 0)
+        }
+
+        return nsText.lineRange(
+            for: NSRange(location: min(boundedLocation, nsText.length - 1), length: 0)
+        )
+    }
+
+    private static func continuationIndent(for line: MarkdownTaskLine) -> String {
+        line.indentation + String(repeating: " ", count: line.syntaxRange.length)
+    }
+
+    private static func isContinuationLine(_ line: String, for taskLine: MarkdownTaskLine) -> Bool {
+        if line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return true
+        }
+
+        return line.hasPrefix(continuationIndent(for: taskLine))
+    }
+
+    private static func leadingWhitespaceLength(in line: String) -> Int {
+        let nsLine = line as NSString
+        var length = 0
+
+        while length < nsLine.length {
+            let character = nsLine.character(at: length)
+            guard character == 9 || character == 32 else {
+                break
+            }
+
+            length += 1
+        }
+
+        return length
+    }
+
     private static func contentRangeWithoutNewline(from lineRange: NSRange, in text: NSString) -> NSRange {
         var length = lineRange.length
 
@@ -205,6 +402,10 @@ enum MarkdownTaskParser {
         }
 
         return NSRange(location: lineRange.location, length: length)
+    }
+
+    private static func isNewline(_ character: unichar) -> Bool {
+        character == 10 || character == 13
     }
 
     private static func indentColumns(in indentation: String) -> Int {

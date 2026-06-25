@@ -2,6 +2,16 @@ import AppKit
 import Combine
 import SwiftUI
 
+private final class StickyWindow: NSWindow {
+    override var canBecomeKey: Bool {
+        true
+    }
+
+    override var canBecomeMain: Bool {
+        true
+    }
+}
+
 @MainActor
 final class StickyWindowController: NSObject, NSWindowDelegate {
     private let appState: AppState
@@ -33,19 +43,17 @@ final class StickyWindowController: NSObject, NSWindowDelegate {
             .environmentObject(appState)
         let hostingView = NSHostingView(rootView: rootView)
 
-        let window = NSWindow(
+        let window = StickyWindow(
             contentRect: frame,
-            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+            styleMask: [.borderless, .resizable],
             backing: .buffered,
             defer: false
         )
 
         window.title = "DailySticky"
-        window.titleVisibility = .hidden
-        window.titlebarAppearsTransparent = true
         window.isMovableByWindowBackground = true
         window.isReleasedWhenClosed = false
-        window.minSize = NSSize(width: 320, height: 420)
+        window.minSize = NSSize(width: 320, height: 280)
         window.backgroundColor = .clear
         window.isOpaque = false
         window.hasShadow = true
@@ -99,4 +107,3 @@ final class StickyWindowController: NSObject, NSWindowDelegate {
         appState.updateWindowFrame(WindowFrameStore.storedFrame(from: window.frame))
     }
 }
-

@@ -12,14 +12,13 @@ struct StickyRootView: View {
 
             DailyNoteEditorView()
         }
-        .frame(minWidth: 320, minHeight: 420)
+        .frame(minWidth: 320, minHeight: 280)
         .background(AppTheme.paper)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .stroke(AppTheme.separator, lineWidth: 1)
         )
-        .padding(8)
         .background(Color.clear)
         .foregroundStyle(AppTheme.text)
     }

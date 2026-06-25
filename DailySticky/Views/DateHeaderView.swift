@@ -13,35 +13,35 @@ struct DateHeaderView: View {
             .buttonStyle(StickyIconButtonStyle())
             .help("Previous day")
 
-            VStack(spacing: 4) {
+            ViewThatFits(in: .horizontal) {
                 Text(appState.currentDateTitle)
-                    .font(.system(size: 15, weight: .semibold, design: .rounded))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.75)
-
-                if appState.isShowingToday {
-                    Text("Today")
-                        .font(.system(size: 11, weight: .bold, design: .rounded))
-                        .foregroundStyle(AppTheme.accent)
-                        .padding(.horizontal, 9)
-                        .frame(height: 24)
-                        .background(
-                            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                .fill(AppTheme.accent.opacity(0.14))
-                        )
-                } else {
-                    Button {
-                        appState.jumpToToday()
-                    } label: {
-                        Text("Back to Today")
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.75)
-                    }
-                    .buttonStyle(StickyTextButtonStyle())
-                    .help("Go back to today")
-                }
+                Text(appState.currentCompactDateTitle)
             }
-            .frame(maxWidth: .infinity)
+            .font(.system(size: 14, weight: .semibold, design: .rounded))
+            .lineLimit(1)
+            .frame(maxWidth: .infinity, alignment: .center)
+
+            if !appState.isShowingToday {
+                Button {
+                    appState.jumpToToday()
+                } label: {
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 4) {
+                            Text("Back to Today")
+                                .lineLimit(1)
+                            TodayCalendarIcon()
+                        }
+
+                        HStack(spacing: 4) {
+                            Image(systemName: "return")
+                            TodayCalendarIcon()
+                        }
+                    }
+                }
+                .buttonStyle(StickyTextButtonStyle())
+                .accessibilityLabel("Back to Today")
+                .help("Back to today")
+            }
 
             Button {
                 appState.goToNextDay()
@@ -54,7 +54,39 @@ struct DateHeaderView: View {
             WindowControlsView()
         }
         .padding(.horizontal, 12)
-        .padding(.top, 12)
-        .padding(.bottom, 10)
+        .padding(.vertical, 8)
+    }
+}
+
+private struct TodayCalendarIcon: View {
+    private var dayNumber: String {
+        let day = Calendar.autoupdatingCurrent.component(.day, from: Date())
+        return "\(day)"
+    }
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 2.2, style: .continuous)
+                .stroke(lineWidth: 1.55)
+                .frame(width: 13.4, height: 11.4)
+                .offset(y: 1.35)
+
+            Path { path in
+                path.move(to: CGPoint(x: 4.3, y: 1.2))
+                path.addLine(to: CGPoint(x: 4.3, y: 4.15))
+                path.move(to: CGPoint(x: 10.7, y: 1.2))
+                path.addLine(to: CGPoint(x: 10.7, y: 4.15))
+                path.move(to: CGPoint(x: 1.3, y: 5.35))
+                path.addLine(to: CGPoint(x: 13.7, y: 5.35))
+            }
+            .stroke(style: StrokeStyle(lineWidth: 1.55, lineCap: .round, lineJoin: .round))
+
+            Text(dayNumber)
+                .font(.system(size: 6.7, weight: .black, design: .rounded))
+                .monospacedDigit()
+                .offset(y: 3.1)
+        }
+        .frame(width: 15, height: 15)
+        .accessibilityHidden(true)
     }
 }

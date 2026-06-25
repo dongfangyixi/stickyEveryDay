@@ -1,6 +1,26 @@
 import AppKit
 import SwiftUI
 
+private enum TodoLayout {
+    static let checkboxFrameWidth: CGFloat = 26
+    static let checkboxFrameHeight: CGFloat = 22
+    static let checkboxVisualSize: CGFloat = 16
+    static let checkboxTextGap: CGFloat = 8
+    static let markdownIndentColumnsPerLevel: CGFloat = 4
+
+    static var checkboxDrawInset: CGFloat {
+        (checkboxFrameWidth - checkboxVisualSize) / 2
+    }
+
+    static var taskTextOffset: CGFloat {
+        checkboxVisualSize + checkboxTextGap
+    }
+
+    static var levelIndent: CGFloat {
+        taskTextOffset
+    }
+}
+
 struct DailyNoteEditorView: View {
     @EnvironmentObject private var appState: AppState
 
@@ -19,7 +39,8 @@ struct DailyNoteEditorView: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(AppTheme.paperInset.opacity(0.76))
         )
-        .padding(14)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 10)
     }
 }
 
@@ -105,23 +126,29 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         shouldChangeTextIn affectedCharRange: NSRange,
         replacementString: String?
     ) -> Bool {
-        guard replacementString == "\n",
-              affectedCharRange.length == 0,
-              let edit = MarkdownTaskParser.newlineEdit(
-                in: textView.string,
-                selectedRange: affectedCharRange
-              )
-        else {
-            return true
-        }
-
-        textView.insertText(edit.replacement, replacementRange: affectedCharRange)
-        return false
+        true
     }
 
     func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
         switch commandSelector {
+        case #selector(NSResponder.insertLineBreak(_:)):
+            return applyTextEdit(
+                MarkdownTaskParser.softLineBreakEdit(
+                    in: textView.string,
+                    selectedRange: textView.selectedRange()
+                )
+            )
+
         case #selector(NSResponder.insertNewline(_:)):
+            if NSApp.currentEvent?.modifierFlags.contains(.shift) == true {
+                return applyTextEdit(
+                    MarkdownTaskParser.softLineBreakEdit(
+                        in: textView.string,
+                        selectedRange: textView.selectedRange()
+                    )
+                )
+            }
+
             return applyTextEdit(
                 MarkdownTaskParser.newlineEdit(
                     in: textView.string,
@@ -186,7 +213,7 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             .backgroundColor: NSColor.selectedTextBackgroundColor
         ]
         textView.insertionPointColor = NSColor(calibratedRed: 0.16, green: 0.34, blue: 0.42, alpha: 1)
-        textView.textContainerInset = NSSize(width: 36, height: 12)
+        textView.textContainerInset = NSSize(width: 8, height: 10)
         textView.textContainer?.lineFragmentPadding = 0
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
@@ -248,7 +275,8 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         let textContainerOrigin = textView.textContainerOrigin
 
         let lines = MarkdownTaskParser.todoLines(in: textView.string)
-        applyMarkdownAttributes(taskLines: lines)
+        let continuationLines = MarkdownTaskParser.continuationLines(in: textView.string)
+        applyMarkdownAttributes(taskLines: lines, continuationLines: continuationLines)
         layoutManager.ensureLayout(for: textContainer)
 
         var checkboxItems: [TodoCheckboxOverlayItem] = []
@@ -273,17 +301,19 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
                 continue
             }
 
-            let textStartX = taskTextStartX(
+            let x = taskCheckboxFrameX(
                 for: line,
-                layoutManager: layoutManager,
-                textContainer: textContainer,
                 textContainerOrigin: textContainerOrigin,
                 visibleBounds: visibleBounds
             )
-            let x = max(8, textStartX - 28)
             checkboxItems.append(
                 TodoCheckboxOverlayItem(
-                    frame: NSRect(x: x, y: y - 2, width: 26, height: 22),
+                    frame: NSRect(
+                        x: x,
+                        y: y - 2,
+                        width: TodoLayout.checkboxFrameWidth,
+                        height: TodoLayout.checkboxFrameHeight
+                    ),
                     isChecked: line.isCompleted,
                     lineLocation: line.lineRange.location
                 )
@@ -296,77 +326,27 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         }
     }
 
-    private func taskTextStartX(
+    private func taskCheckboxFrameX(
         for line: MarkdownTaskLine,
-        layoutManager: NSLayoutManager,
-        textContainer: NSTextContainer,
         textContainerOrigin: NSPoint,
         visibleBounds: NSRect
     ) -> CGFloat {
-        guard let characterLocation = firstVisibleTaskTextLocation(for: line) else {
-            return emptyTaskTextStartX(
-                for: line,
-                layoutManager: layoutManager,
-                textContainer: textContainer,
-                textContainerOrigin: textContainerOrigin,
-                visibleBounds: visibleBounds
-            )
-        }
-
-        let glyphRange = layoutManager.glyphRange(
-            forCharacterRange: NSRange(location: characterLocation, length: 1),
-            actualCharacterRange: nil
-        )
-
-        guard glyphRange.length > 0 else {
-            return textContainerOrigin.x + 24
-        }
-
-        let glyphRect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
-        return textContainerOrigin.x + glyphRect.minX - visibleBounds.origin.x
+        let checkboxLeftX = textContainerOrigin.x + taskCheckboxIndent(for: line) - visibleBounds.origin.x
+        return max(0, checkboxLeftX - TodoLayout.checkboxDrawInset)
     }
 
-    private func emptyTaskTextStartX(
-        for line: MarkdownTaskLine,
-        layoutManager: NSLayoutManager,
-        textContainer: NSTextContainer,
-        textContainerOrigin: NSPoint,
-        visibleBounds: NSRect
-    ) -> CGFloat {
-        let glyphRange = layoutManager.glyphRange(
-            forCharacterRange: line.syntaxRange,
-            actualCharacterRange: nil
-        )
-
-        guard glyphRange.length > 0 else {
-            return textContainerOrigin.x + 24
-        }
-
-        let glyphRect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
-        return textContainerOrigin.x + glyphRect.maxX - visibleBounds.origin.x
+    private func taskCheckboxIndent(for line: MarkdownTaskLine) -> CGFloat {
+        CGFloat(line.indentColumns) / TodoLayout.markdownIndentColumnsPerLevel * TodoLayout.levelIndent
     }
 
-    private func firstVisibleTaskTextLocation(for line: MarkdownTaskLine) -> Int? {
-        let nsText = textView.string as NSString
-        let textEnd = min(NSMaxRange(line.textRange), nsText.length)
-
-        guard line.textRange.location < textEnd else {
-            return nil
-        }
-
-        for location in line.textRange.location..<textEnd {
-            let character = nsText.character(at: location)
-            guard let scalar = UnicodeScalar(character),
-                  CharacterSet.whitespacesAndNewlines.contains(scalar)
-            else {
-                return location
-            }
-        }
-
-        return line.textRange.location
+    private func taskTextIndent(for line: MarkdownTaskLine) -> CGFloat {
+        taskCheckboxIndent(for: line) + TodoLayout.taskTextOffset
     }
 
-    private func applyMarkdownAttributes(taskLines: [MarkdownTaskLine]) {
+    private func applyMarkdownAttributes(
+        taskLines: [MarkdownTaskLine],
+        continuationLines: [MarkdownContinuationLine]
+    ) {
         let fullRange = NSRange(location: 0, length: (textView.string as NSString).length)
 
         guard fullRange.length > 0, let textStorage = textView.textStorage else {
@@ -435,24 +415,23 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         }
 
         for line in taskLines {
-            let taskSyntaxAnchorRange = NSRange(
-                location: max(line.syntaxRange.location, NSMaxRange(line.syntaxRange) - 1),
-                length: min(1, line.syntaxRange.length)
-            )
+            let paragraphRange = clampedRange(line.lineRange, within: fullRange)
+            let prefixRange = clampedRange(taskPrefixRange(for: line), within: fullRange)
+
+            if paragraphRange.length > 0 {
+                textStorage.addAttribute(
+                    .paragraphStyle,
+                    value: taskParagraphStyle(for: line),
+                    range: paragraphRange
+                )
+            }
 
             textStorage.addAttributes(
                 [
                     .foregroundColor: NSColor.clear,
                     .font: hiddenSyntaxFont()
                 ],
-                range: line.syntaxRange
-            )
-            textStorage.addAttributes(
-                [
-                    .foregroundColor: NSColor.clear,
-                    .font: baseFont
-                ],
-                range: taskSyntaxAnchorRange
+                range: prefixRange
             )
 
             guard line.isCompleted, line.textRange.length > 0 else {
@@ -469,9 +448,80 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             )
         }
 
+        for line in continuationLines {
+            let paragraphRange = clampedRange(line.lineRange, within: fullRange)
+            let whitespaceRange = clampedRange(line.leadingWhitespaceRange, within: fullRange)
+
+            if paragraphRange.length > 0 {
+                textStorage.addAttribute(
+                    .paragraphStyle,
+                    value: taskParagraphStyle(for: line.taskLine),
+                    range: paragraphRange
+                )
+            }
+
+            if whitespaceRange.length > 0 {
+                textStorage.addAttributes(
+                    [
+                        .foregroundColor: NSColor.clear,
+                        .font: hiddenSyntaxFont()
+                    ],
+                    range: whitespaceRange
+                )
+            }
+        }
+
         textStorage.endEditing()
         textView.setSelectedRange(selectedRange)
-        textView.typingAttributes = baseAttributes()
+        textView.typingAttributes = typingAttributes(
+            for: selectedRange,
+            taskLines: taskLines,
+            continuationLines: continuationLines
+        )
+    }
+
+    private func typingAttributes(
+        for selectedRange: NSRange,
+        taskLines: [MarkdownTaskLine],
+        continuationLines: [MarkdownContinuationLine]
+    ) -> [NSAttributedString.Key: Any] {
+        var attributes = baseAttributes()
+        let insertionLocation = selectedRange.location
+
+        if let line = taskLines.first(where: { containsInsertionLocation(insertionLocation, lineRange: $0.lineRange) }) {
+            attributes[.paragraphStyle] = taskParagraphStyle(for: line)
+        } else if let line = continuationLines.first(where: { containsInsertionLocation(insertionLocation, lineRange: $0.lineRange) }) {
+            attributes[.paragraphStyle] = taskParagraphStyle(for: line.taskLine)
+        }
+
+        return attributes
+    }
+
+    private func containsInsertionLocation(_ location: Int, lineRange: NSRange) -> Bool {
+        location >= lineRange.location && location <= NSMaxRange(lineRange)
+    }
+
+    private func taskParagraphStyle(for line: MarkdownTaskLine) -> NSParagraphStyle {
+        let style = NSMutableParagraphStyle()
+        let textIndent = taskTextIndent(for: line)
+        style.firstLineHeadIndent = textIndent
+        style.headIndent = textIndent
+        style.minimumLineHeight = ceil(baseFont.ascender - baseFont.descender + baseFont.leading)
+        style.lineBreakMode = .byWordWrapping
+        return style
+    }
+
+    private func taskPrefixRange(for line: MarkdownTaskLine) -> NSRange {
+        NSRange(
+            location: line.lineRange.location,
+            length: max(0, NSMaxRange(line.syntaxRange) - line.lineRange.location)
+        )
+    }
+
+    private func clampedRange(_ range: NSRange, within bounds: NSRange) -> NSRange {
+        let lowerBound = max(range.location, bounds.location)
+        let upperBound = min(NSMaxRange(range), NSMaxRange(bounds))
+        return NSRange(location: lowerBound, length: max(0, upperBound - lowerBound))
     }
 
     private func headingSize(for level: Int) -> CGFloat {
@@ -527,7 +577,7 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         textView.textStorage?.replaceCharacters(in: edit.range, with: edit.replacement)
         textView.didChangeText()
         textView.setSelectedRange(edit.selectedRange)
-        refreshCheckboxesSoon()
+        refreshCheckboxes()
         return true
     }
 
@@ -553,7 +603,7 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         }
         textView.setSelectedRange(adjustedRange)
 
-        refreshCheckboxesSoon()
+        refreshCheckboxes()
     }
 }
 
