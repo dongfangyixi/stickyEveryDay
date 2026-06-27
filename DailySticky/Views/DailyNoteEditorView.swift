@@ -68,6 +68,10 @@ private struct InlineTodoTextEditor: NSViewRepresentable {
         context.coordinator.text = $text
         nsView.setTheme(palette)
 
+        guard nsView.canApplyExternalTextUpdate else {
+            return
+        }
+
         if nsView.text != text {
             nsView.setText(text)
         }
@@ -166,6 +170,10 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         markdownText()
     }
 
+    var canApplyExternalTextUpdate: Bool {
+        !isComposingMarkedText
+    }
+
     init(frame frameRect: NSRect = .zero, palette: AppTheme.Palette = AppTheme.yellow) {
         self.palette = palette
         super.init(frame: frameRect)
@@ -193,6 +201,10 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     }
 
     func setText(_ text: String) {
+        guard !isComposingMarkedText else {
+            return
+        }
+
         clearEditorUndoHistory()
         pendingUndoSnapshot = nil
         let document = Self.displayDocument(from: text)
@@ -242,6 +254,11 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         }
 
         reconcileLineKinds()
+        if isComposingMarkedText {
+            refreshOverlay()
+            return
+        }
+
         if promoteTypedMarkdownTaskIfNeeded() {
             registerUndoSnapshotIfChanged(from: undoSnapshot)
             return
@@ -252,7 +269,9 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     }
 
     func textViewDidChangeSelection(_ notification: Notification) {
-        guard !isRefreshingSelectionDisplay else {
+        guard !isRefreshingSelectionDisplay,
+              !isComposingMarkedText
+        else {
             return
         }
 
@@ -1051,6 +1070,9 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         guard let textStorage = textView.textStorage else {
             return
         }
+        guard !isComposingMarkedText else {
+            return
+        }
 
         let selectedRange = textView.selectedRange()
         let completedColor = palette.completedTextNS
@@ -1146,6 +1168,10 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         textView.setSelectedRange(selectedRange)
         updateTypingAttributesForCurrentSelection()
         textView.setNeedsDisplay(textView.visibleRect)
+    }
+
+    private var isComposingMarkedText: Bool {
+        textView.hasMarkedText()
     }
 
     private func isActiveMarkdownSpan(
