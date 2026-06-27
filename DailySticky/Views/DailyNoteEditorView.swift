@@ -139,6 +139,13 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         }
     }
 
+    private struct PendingDefaultTextEdit {
+        var text: String
+        var lineKinds: [LineKind]
+        var range: NSRange
+        var replacement: String
+    }
+
     private let scrollView = NSScrollView()
     private let textView = TodoTextView()
     private let overlayView = TodoCheckboxOverlayView()
@@ -150,6 +157,7 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     private var preservesEmptyStructuredLine = false
     private var preservesEmptyStructuredLineOnNextTextChange = false
     private var pendingUndoSnapshot: EditorSnapshot?
+    private var pendingDefaultTextEdit: PendingDefaultTextEdit?
 
     var onTextChange: ((String) -> Void)?
 
@@ -212,6 +220,8 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
 
         let undoSnapshot = pendingUndoSnapshot
         pendingUndoSnapshot = nil
+        let defaultTextEdit = pendingDefaultTextEdit
+        pendingDefaultTextEdit = nil
 
         let shouldPreserveEmptyStructuredLine = preservesEmptyStructuredLineOnNextTextChange
             && textView.string.isEmpty
@@ -224,6 +234,10 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             if shouldPreserveEmptyStructuredLine {
                 preservesEmptyStructuredLine = false
             }
+        }
+
+        if let defaultTextEdit {
+            lineKinds = lineKindsAfterDefaultTextEdit(defaultTextEdit)
         }
 
         reconcileLineKinds()
@@ -249,6 +263,15 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             pendingUndoSnapshot = editorSnapshot()
         }
 
+        if !isApplyingProgrammaticChange && !isRestoringUndoSnapshot {
+            pendingDefaultTextEdit = PendingDefaultTextEdit(
+                text: textView.string,
+                lineKinds: lineKinds,
+                range: affectedCharRange,
+                replacement: replacementString ?? ""
+            )
+        }
+
         return true
     }
 
@@ -269,7 +292,18 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             return adjustIndent(by: -4)
 
         case #selector(NSResponder.deleteBackward(_:)):
+            if textView.selectedRange().length > 0 {
+                return deleteSelectionPreservingLineKinds()
+            }
+
             return handleDeleteBackward()
+
+        case #selector(NSResponder.deleteForward(_:)):
+            if textView.selectedRange().length > 0 {
+                return deleteSelectionPreservingLineKinds()
+            }
+
+            return false
 
         default:
             return false
@@ -491,6 +525,79 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         case .normal:
             return false
         }
+    }
+
+    private func deleteSelectionPreservingLineKinds() -> Bool {
+        let selectedRange = textView.selectedRange()
+        guard selectedRange.length > 0 else {
+            return false
+        }
+
+        guard let structuredDelete = structuredLineDeletionRange(for: selectedRange) else {
+            return false
+        }
+
+        let selectedRangeAfterDelete = NSRange(location: structuredDelete.range.location, length: 0)
+        return applyTextStorageEdit(
+            range: structuredDelete.range,
+            replacement: "",
+            selectedRange: selectedRangeAfterDelete
+        ) {
+            lineKinds.replaceSubrange(structuredDelete.lineRange, with: [])
+            if lineKinds.isEmpty {
+                lineKinds = [.normal]
+            }
+        }
+    }
+
+    private func structuredLineDeletionRange(
+        for selectedRange: NSRange
+    ) -> (range: NSRange, lineRange: Range<Int>)? {
+        let infos = lineInfos()
+        let selectedEnd = NSMaxRange(selectedRange)
+        let fullySelectedStructuredLines = infos.filter { line in
+            guard kind(at: line.index).isStructured,
+                  selectedRange.location <= line.contentRange.location,
+                  selectedEnd >= NSMaxRange(line.contentRange)
+            else {
+                return false
+            }
+
+            return selectedRange.intersection(line.lineRange) != nil
+        }
+
+        guard let firstLine = fullySelectedStructuredLines.first,
+              let lastLine = fullySelectedStructuredLines.last
+        else {
+            return nil
+        }
+
+        let deleteStart = firstLine.lineRange.location
+        var deleteEnd = NSMaxRange(lastLine.lineRange)
+        if deleteEnd == deleteStart,
+           firstLine.index > 0,
+           infos.indices.contains(firstLine.index - 1) {
+            let previousLine = infos[firstLine.index - 1]
+            return (
+                range: NSRange(location: NSMaxRange(previousLine.contentRange), length: 1),
+                lineRange: firstLine.index..<(lastLine.index + 1)
+            )
+        }
+
+        if deleteEnd >= (textView.string as NSString).length,
+           firstLine.index > 0 {
+            deleteEnd = NSMaxRange(lastLine.contentRange)
+            let previousNewlineLocation = deleteStart - 1
+            return (
+                range: NSRange(location: previousNewlineLocation, length: max(0, deleteEnd - previousNewlineLocation)),
+                lineRange: firstLine.index..<(lastLine.index + 1)
+            )
+        }
+
+        return (
+            range: NSRange(location: deleteStart, length: max(0, deleteEnd - deleteStart)),
+            lineRange: firstLine.index..<(lastLine.index + 1)
+        )
     }
 
     private func shouldPreserveEmptyTaskWhenDeletingBackward(
@@ -1140,6 +1247,78 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         }
     }
 
+    private func lineKindsAfterDefaultTextEdit(_ edit: PendingDefaultTextEdit) -> [LineKind] {
+        var result = normalizedLineKinds(edit.lineKinds, for: edit.text)
+        let textAfterEdit = textView.string
+        let nsTextBefore = edit.text as NSString
+        guard edit.range.location >= 0,
+              NSMaxRange(edit.range) <= nsTextBefore.length
+        else {
+            return normalizedLineKinds(result, for: textAfterEdit)
+        }
+
+        let deletedText = nsTextBefore.substring(with: edit.range) as NSString
+        let oldInfos = lineInfos(for: edit.text)
+        let removedLineIndexes = deletedNewlineLocations(
+            in: deletedText as String,
+            startingAt: edit.range.location
+        )
+        .compactMap { newlineLocation in
+            lineKindIndexToRemove(
+                forDeletedNewlineAt: newlineLocation,
+                oldInfos: oldInfos,
+                oldLineKinds: result
+            )
+        }
+
+        for index in Set(removedLineIndexes).sorted(by: >) where result.indices.contains(index) {
+            result.remove(at: index)
+        }
+
+        let insertedLineCount = edit.replacement.filter { $0 == "\n" }.count
+        if insertedLineCount > 0 {
+            let insertionLineIndex = lineInfo(at: edit.range.location, in: oldInfos)?.index ?? result.count
+            let insertIndex = min(result.count, insertionLineIndex + 1)
+            result.insert(
+                contentsOf: Array(repeating: .normal, count: insertedLineCount),
+                at: insertIndex
+            )
+        }
+
+        return normalizedLineKinds(result, for: textAfterEdit)
+    }
+
+    private func deletedNewlineLocations(in deletedText: String, startingAt startLocation: Int) -> [Int] {
+        let nsDeletedText = deletedText as NSString
+        var locations: [Int] = []
+
+        for offset in 0..<nsDeletedText.length {
+            if nsDeletedText.substring(with: NSRange(location: offset, length: 1)) == "\n" {
+                locations.append(startLocation + offset)
+            }
+        }
+
+        return locations
+    }
+
+    private func lineKindIndexToRemove(
+        forDeletedNewlineAt newlineLocation: Int,
+        oldInfos: [DisplayLineInfo],
+        oldLineKinds: [LineKind]
+    ) -> Int? {
+        guard let previousLine = lineInfo(at: newlineLocation, in: oldInfos) else {
+            return nil
+        }
+
+        if previousLine.text.isEmpty,
+           kind(at: previousLine.index, in: oldLineKinds) == .normal {
+            return previousLine.index
+        }
+
+        let followingLineIndex = min(previousLine.index + 1, oldLineKinds.count - 1)
+        return followingLineIndex >= 0 ? followingLineIndex : nil
+    }
+
     private func normalizedLineKinds(_ kinds: [LineKind], for text: String) -> [LineKind] {
         let lineCount = text.components(separatedBy: "\n").count
         var result = kinds
@@ -1161,7 +1340,11 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     }
 
     private func lineInfos() -> [DisplayLineInfo] {
-        let lines = displayLines()
+        lineInfos(for: textView.string)
+    }
+
+    private func lineInfos(for text: String) -> [DisplayLineInfo] {
+        let lines = text.components(separatedBy: "\n")
         var result: [DisplayLineInfo] = []
         var location = 0
 
@@ -1197,17 +1380,27 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
 
     private func lineInfo(at location: Int) -> DisplayLineInfo? {
         let boundedLocation = max(0, min(location, (textView.string as NSString).length))
-        let infos = lineInfos()
+        return lineInfo(at: boundedLocation, in: lineInfos())
+    }
 
+    private func lineInfo(at location: Int, in infos: [DisplayLineInfo]) -> DisplayLineInfo? {
         for info in infos {
             let lineEnd = NSMaxRange(info.lineRange)
             let contentEnd = NSMaxRange(info.contentRange)
-            if boundedLocation <= contentEnd || boundedLocation < lineEnd {
+            if location <= contentEnd || location < lineEnd {
                 return info
             }
         }
 
         return infos.last
+    }
+
+    private func kind(at index: Int, in kinds: [LineKind]) -> LineKind {
+        guard index >= 0, index < kinds.count else {
+            return .normal
+        }
+
+        return kinds[index]
     }
 
     private func lineFragmentRect(
