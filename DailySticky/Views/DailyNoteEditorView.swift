@@ -558,7 +558,8 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         let fullySelectedStructuredLines = infos.filter { line in
             guard kind(at: line.index).isStructured,
                   selectedRange.location <= line.contentRange.location,
-                  selectedEnd >= NSMaxRange(line.contentRange)
+                  selectedEnd >= NSMaxRange(line.contentRange),
+                  selectionIncludesLineStructure(selectedRange, for: line)
             else {
                 return false
             }
@@ -600,6 +601,14 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         )
     }
 
+    private func selectionIncludesLineStructure(
+        _ selectedRange: NSRange,
+        for line: DisplayLineInfo
+    ) -> Bool {
+        selectedRange.location < line.contentRange.location
+            || NSMaxRange(selectedRange) > NSMaxRange(line.contentRange)
+    }
+
     private func shouldPreserveEmptyTaskWhenDeletingBackward(
         from selectedRange: NSRange,
         in line: DisplayLineInfo
@@ -632,9 +641,11 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
 
     private func cutSelectionToPasteboard() -> Bool {
         let selectedRange = textView.selectedRange()
-        guard selectedRange.length > 0,
-              copySelectionToPasteboard()
-        else {
+        guard selectedRange.length > 0 else {
+            return cutCurrentLineToPasteboard()
+        }
+
+        guard copySelectionToPasteboard() else {
             return false
         }
 
@@ -645,6 +656,51 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         ) {
             if isFullTextRange(selectedRange) {
                 lineKinds = [.normal]
+            }
+        }
+    }
+
+    private func cutCurrentLineToPasteboard() -> Bool {
+        let selectedRange = textView.selectedRange()
+        guard selectedRange.length == 0,
+              let line = lineInfo(at: selectedRange.location)
+        else {
+            return false
+        }
+
+        let lineKind = kind(at: line.index)
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(markdownLinePrefix(for: lineKind) + line.text, forType: .string)
+
+        let infos = lineInfos()
+        let deleteRange: NSRange
+        let selectedRangeAfterDelete: NSRange
+
+        if infos.count <= 1 {
+            deleteRange = line.contentRange
+            selectedRangeAfterDelete = NSRange(location: line.contentRange.location, length: 0)
+        } else if line.index < infos.count - 1 {
+            deleteRange = line.lineRange
+            selectedRangeAfterDelete = NSRange(location: line.lineRange.location, length: 0)
+        } else {
+            let previousNewlineLocation = max(0, line.lineRange.location - 1)
+            deleteRange = NSRange(
+                location: previousNewlineLocation,
+                length: NSMaxRange(line.contentRange) - previousNewlineLocation
+            )
+            selectedRangeAfterDelete = NSRange(location: previousNewlineLocation, length: 0)
+        }
+
+        return applyTextStorageEdit(
+            range: deleteRange,
+            replacement: "",
+            selectedRange: selectedRangeAfterDelete
+        ) {
+            if infos.count <= 1 {
+                lineKinds = [.normal]
+            } else if lineKinds.indices.contains(line.index) {
+                lineKinds.remove(at: line.index)
             }
         }
     }
@@ -1592,9 +1648,22 @@ private final class TodoTextView: NSTextView {
 
     override func keyDown(with event: NSEvent) {
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        guard event.charactersIgnoringModifiers?.lowercased() == "z",
-              flags.contains(.command) || flags.contains(.control)
-        else {
+        let character = event.charactersIgnoringModifiers?.lowercased()
+        guard flags.contains(.command) || flags.contains(.control) else {
+            super.keyDown(with: event)
+            return
+        }
+
+        if character == "x" {
+            if cutHandler?() == true {
+                return
+            }
+
+            super.keyDown(with: event)
+            return
+        }
+
+        guard character == "z" else {
             super.keyDown(with: event)
             return
         }
