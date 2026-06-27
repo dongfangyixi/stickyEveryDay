@@ -11,6 +11,7 @@ enum MarkdownInlineStyle: Equatable {
 
 struct MarkdownInlineSpan: Equatable {
     var style: MarkdownInlineStyle
+    var fullRange: NSRange
     var contentRange: NSRange
     var syntaxRanges: [NSRange]
 }
@@ -70,6 +71,7 @@ private struct MarkdownInlineSpanCollector: MarkupWalker {
         spans.append(
             MarkdownInlineSpan(
                 style: .code,
+                fullRange: fullRange,
                 contentRange: contentRange,
                 syntaxRanges: syntaxRanges(in: fullRange, excluding: contentRange)
             )
@@ -91,6 +93,7 @@ private struct MarkdownInlineSpanCollector: MarkupWalker {
         spans.append(
             MarkdownInlineSpan(
                 style: style,
+                fullRange: fullRange,
                 contentRange: contentRange,
                 syntaxRanges: syntaxRanges(in: fullRange, excluding: contentRange)
             )

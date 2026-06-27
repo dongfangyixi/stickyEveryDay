@@ -158,6 +158,7 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     private var preservesEmptyStructuredLineOnNextTextChange = false
     private var pendingUndoSnapshot: EditorSnapshot?
     private var pendingDefaultTextEdit: PendingDefaultTextEdit?
+    private var isRefreshingSelectionDisplay = false
 
     var onTextChange: ((String) -> Void)?
 
@@ -251,7 +252,14 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     }
 
     func textViewDidChangeSelection(_ notification: Notification) {
-        updateTypingAttributesForCurrentSelection()
+        guard !isRefreshingSelectionDisplay else {
+            return
+        }
+
+        isRefreshingSelectionDisplay = true
+        applyDisplayAttributes()
+        refreshOverlay()
+        isRefreshingSelectionDisplay = false
     }
 
     func textView(
@@ -1055,15 +1063,18 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         }
 
         if shouldParseInlineMarkdown {
-            for span in MarkdownInlineParser.spans(in: textView.string) {
-                for syntaxRange in span.syntaxRanges {
-                    textStorage.addAttributes(
-                        [
-                            .foregroundColor: NSColor.clear,
-                            .font: hiddenSyntaxFont()
-                        ],
-                        range: syntaxRange
-                    )
+            let spans = MarkdownInlineParser.spans(in: textView.string)
+            for span in spans {
+                if !isActiveMarkdownSpan(span, selectedRange: selectedRange) {
+                    for syntaxRange in span.syntaxRanges {
+                        textStorage.addAttributes(
+                            [
+                                .foregroundColor: NSColor.clear,
+                                .font: hiddenSyntaxFont()
+                            ],
+                            range: syntaxRange
+                        )
+                    }
                 }
 
                 switch span.style {
@@ -1135,6 +1146,19 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         textView.setSelectedRange(selectedRange)
         updateTypingAttributesForCurrentSelection()
         textView.setNeedsDisplay(textView.visibleRect)
+    }
+
+    private func isActiveMarkdownSpan(
+        _ span: MarkdownInlineSpan,
+        selectedRange: NSRange
+    ) -> Bool {
+        if selectedRange.length > 0 {
+            return selectedRange.intersection(span.fullRange) != nil
+        }
+
+        let location = selectedRange.location
+        return location > span.fullRange.location
+            && location < NSMaxRange(span.fullRange)
     }
 
     private var shouldParseInlineMarkdown: Bool {
