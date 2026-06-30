@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 400 400" role="img" aria-label="DailySticky app icon">
+  <defs>
+    <linearGradient id="ds-paper" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FCEDA0"></stop><stop offset="1" stop-color="#F3D265"></stop>
+    </linearGradient>
+    <linearGradient id="ds-teal" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1F8C7C"></stop><stop offset="1" stop-color="#115C54"></stop>
+    </linearGradient>
+    <linearGradient id="ds-fold" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#EAC65C"></stop><stop offset="1" stop-color="#D3A538"></stop>
+    </linearGradient>
+    <linearGradient id="ds-gloss" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity=".62"></stop><stop offset="1" stop-color="#ffffff" stop-opacity="0"></stop>
+    </linearGradient>
+    <clipPath id="ds-clip"><rect x="0" y="0" width="400" height="400" rx="90"></rect></clipPath>
+  </defs>
+  <g clip-path="url(#ds-clip)">
+    
+    <path d="M90 0 H310 Q400 0 400 90 V250 Q312 312 250 400 H90 Q0 400 0 310 V90 Q0 0 90 0 Z" fill="url(#ds-paper)"></path>
+    
+    <rect x="0" y="0" width="400" height="220" rx="90" fill="url(#ds-gloss)" opacity=".5"></rect>
+    
+    <path d="M400 250 Q312 312 250 400 L400 400 Z" fill="url(#ds-teal)"></path>
+    
+    <path d="M400 250 Q312 312 250 400 L282 400 Q332 338 400 286 Z" fill="url(#ds-fold)"></path>
+    
+    <path d="M400 250 Q312 312 250 400" fill="none" stroke="#0d4f48" stroke-width="3" opacity=".28" stroke-linecap="round"></path>
+  </g>
+</svg>

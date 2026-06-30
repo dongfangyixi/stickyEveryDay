@@ -30,6 +30,8 @@
 		A1000000000000000000001B /* MarkdownTaskParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000001E /* MarkdownTaskParser.swift */; };
 		A1000000000000000000001C /* DailyNoteEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000001F /* DailyNoteEditorView.swift */; };
 		A1000000000000000000001D /* MarkdownInlineParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000020 /* MarkdownInlineParser.swift */; };
+		A1000000000000000000001E /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000021 /* Assets.xcassets */; };
+		A1000000000000000000001F /* AttachmentStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000022 /* AttachmentStore.swift */; };
 		B10000000000000000000001 /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = B20000000000000000000001 /* Markdown */; };
 /* End PBXBuildFile section */
 
@@ -61,6 +63,8 @@
 		A2000000000000000000001E /* MarkdownTaskParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownTaskParser.swift; sourceTree = "<group>"; };
 		A2000000000000000000001F /* DailyNoteEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DailyNoteEditorView.swift; sourceTree = "<group>"; };
 		A20000000000000000000020 /* MarkdownInlineParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownInlineParser.swift; sourceTree = "<group>"; };
+		A20000000000000000000021 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		A20000000000000000000022 /* AttachmentStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentStore.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -103,6 +107,7 @@
 				A40000000000000000000009 /* Platform */,
 				A4000000000000000000000B /* Views */,
 				A4000000000000000000000C /* Theme */,
+				A20000000000000000000021 /* Assets.xcassets */,
 			);
 			path = DailySticky;
 			sourceTree = "<group>";
@@ -151,6 +156,7 @@
 			children = (
 				A2000000000000000000000E /* DateKeyService.swift */,
 				A2000000000000000000000F /* AutoSaveService.swift */,
+				A20000000000000000000022 /* AttachmentStore.swift */,
 				A2000000000000000000001E /* MarkdownTaskParser.swift */,
 				A20000000000000000000020 /* MarkdownInlineParser.swift */,
 			);
@@ -268,6 +274,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A1000000000000000000001E /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -291,6 +298,7 @@
 				A1000000000000000000000C /* DayPageController.swift in Sources */,
 				A1000000000000000000000E /* DateKeyService.swift in Sources */,
 				A1000000000000000000000F /* AutoSaveService.swift in Sources */,
+				A1000000000000000000001F /* AttachmentStore.swift in Sources */,
 				A1000000000000000000001B /* MarkdownTaskParser.swift in Sources */,
 				A1000000000000000000001D /* MarkdownInlineParser.swift in Sources */,
 				A10000000000000000000010 /* StickyWindowController.swift in Sources */,
@@ -442,6 +450,7 @@
 		A70000000000000000000003 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
@@ -463,6 +472,7 @@
 		A70000000000000000000004 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;

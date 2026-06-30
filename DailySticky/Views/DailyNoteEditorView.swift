@@ -29,6 +29,7 @@ struct DailyNoteEditorView: View {
 
         InlineTodoTextEditor(
             palette: palette,
+            dateKey: appState.currentDateKey,
             text: Binding(
                 get: {
                     appState.currentPage.noteText
@@ -49,6 +50,7 @@ struct DailyNoteEditorView: View {
 
 private struct InlineTodoTextEditor: NSViewRepresentable {
     var palette: AppTheme.Palette
+    var dateKey: String
     @Binding var text: String
 
     func makeCoordinator() -> Coordinator {
@@ -56,7 +58,7 @@ private struct InlineTodoTextEditor: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> InlineTodoTextEditorContainer {
-        let view = InlineTodoTextEditorContainer(palette: palette)
+        let view = InlineTodoTextEditorContainer(palette: palette, dateKey: dateKey)
         view.onTextChange = { [coordinator = context.coordinator] newText in
             coordinator.text.wrappedValue = newText
         }
@@ -67,6 +69,7 @@ private struct InlineTodoTextEditor: NSViewRepresentable {
     func updateNSView(_ nsView: InlineTodoTextEditorContainer, context: Context) {
         context.coordinator.text = $text
         nsView.setTheme(palette)
+        nsView.setDateKey(dateKey)
 
         guard nsView.canApplyExternalTextUpdate else {
             return
@@ -131,6 +134,21 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         var text: String
     }
 
+    private struct MarkdownImageReference {
+        var altText: String
+        var path: String
+    }
+
+    private enum HorizontalMovementDirection {
+        case left
+        case right
+    }
+
+    private enum ImageCaretEdge {
+        case leading
+        case trailing
+    }
+
     private struct EditorSnapshot {
         var text: String
         var lineKinds: [LineKind]
@@ -153,8 +171,11 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     private let scrollView = NSScrollView()
     private let textView = TodoTextView()
     private let overlayView = TodoCheckboxOverlayView()
+    private let imageOverlayView = MarkdownImageOverlayView()
     private let baseFont = NSFont.systemFont(ofSize: 14)
     private var palette: AppTheme.Palette
+    private var dateKey: String
+    private var imageCache: [String: NSImage] = [:]
     private var lineKinds: [LineKind] = [.normal]
     private var isApplyingProgrammaticChange = false
     private var isRestoringUndoSnapshot = false
@@ -174,14 +195,16 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         !isComposingMarkedText
     }
 
-    init(frame frameRect: NSRect = .zero, palette: AppTheme.Palette = AppTheme.yellow) {
+    init(frame frameRect: NSRect = .zero, palette: AppTheme.Palette = AppTheme.yellow, dateKey: String = "") {
         self.palette = palette
+        self.dateKey = dateKey
         super.init(frame: frameRect)
         configureViews()
     }
 
     required init?(coder: NSCoder) {
         self.palette = AppTheme.yellow
+        self.dateKey = ""
         super.init(coder: coder)
         configureViews()
     }
@@ -194,6 +217,10 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         self.palette = palette
         applyTheme()
         refreshEditor()
+    }
+
+    func setDateKey(_ dateKey: String) {
+        self.dateKey = dateKey
     }
 
     deinit {
@@ -276,6 +303,7 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         }
 
         isRefreshingSelectionDisplay = true
+        snapSelectionAroundImageIfNeeded()
         applyDisplayAttributes()
         refreshOverlay()
         isRefreshingSelectionDisplay = false
@@ -323,6 +351,10 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
                 return deleteSelectionPreservingLineKinds()
             }
 
+            if deleteImageBeforeCaret() {
+                return true
+            }
+
             return handleDeleteBackward()
 
         case #selector(NSResponder.deleteForward(_:)):
@@ -330,7 +362,21 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
                 return deleteSelectionPreservingLineKinds()
             }
 
-            return false
+            return deleteImageAfterCaret()
+
+        case #selector(NSResponder.moveRight(_:)):
+            return moveAcrossImageIfNeeded(direction: .right)
+
+        case #selector(NSResponder.moveLeft(_:)):
+            return moveAcrossImageIfNeeded(direction: .left)
+
+        case #selector(NSResponder.moveWordRight(_:)),
+             #selector(NSResponder.moveToRightEndOfLine(_:)):
+            return moveAcrossImageIfNeeded(direction: .right)
+
+        case #selector(NSResponder.moveWordLeft(_:)),
+             #selector(NSResponder.moveToLeftEndOfLine(_:)):
+            return moveAcrossImageIfNeeded(direction: .left)
 
         default:
             return false
@@ -385,17 +431,27 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             self?.cutSelectionToPasteboard() ?? false
         }
         textView.pasteHandler = { [weak self] in
-            self?.pasteMarkdownTasksFromPasteboard() ?? false
+            guard let self else {
+                return false
+            }
+
+            return self.pasteImageFromPasteboard()
+                || self.pasteMarkdownTasksFromPasteboard()
+        }
+        textView.canPasteHandler = {
+            Self.canPasteImage(from: .general) || NSPasteboard.general.string(forType: .string) != nil
         }
         textView.checkboxMouseDownHandler = { [weak self] event in
             self?.handleCheckboxMouseDown(event) ?? false
         }
 
+        imageOverlayView.translatesAutoresizingMaskIntoConstraints = false
         overlayView.translatesAutoresizingMaskIntoConstraints = false
         applyTheme()
 
         scrollView.documentView = textView
         addSubview(scrollView)
+        addSubview(imageOverlayView)
         addSubview(overlayView)
 
         NSLayoutConstraint.activate([
@@ -403,6 +459,10 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
             scrollView.topAnchor.constraint(equalTo: topAnchor),
             scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
+            imageOverlayView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            imageOverlayView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            imageOverlayView.topAnchor.constraint(equalTo: topAnchor),
+            imageOverlayView.bottomAnchor.constraint(equalTo: bottomAnchor),
             overlayView.leadingAnchor.constraint(equalTo: leadingAnchor),
             overlayView.trailingAnchor.constraint(equalTo: trailingAnchor),
             overlayView.topAnchor.constraint(equalTo: topAnchor),
@@ -419,9 +479,14 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
 
     private func applyTheme() {
         textView.textColor = palette.textNS
-        textView.insertionPointColor = palette.accentNS
+        updateInsertionPointColor(showCustomImageCaret: false)
         textView.typingAttributes = baseAttributes()
         overlayView.palette = palette
+        imageOverlayView.palette = palette
+    }
+
+    private func updateInsertionPointColor(showCustomImageCaret: Bool) {
+        textView.insertionPointColor = showCustomImageCaret ? .clear : palette.accentNS
     }
 
     @objc private func visibleBoundsChanged() {
@@ -552,6 +617,117 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         case .normal:
             return false
         }
+    }
+
+    private func deleteImageBeforeCaret() -> Bool {
+        let selectedRange = textView.selectedRange()
+        guard selectedRange.length == 0,
+              let line = lineInfo(at: selectedRange.location),
+              imageReference(in: line.text) != nil,
+              selectedRange.location > line.contentRange.location,
+              selectedRange.location <= NSMaxRange(line.contentRange)
+        else {
+            return false
+        }
+
+        return deleteImageLine(line)
+    }
+
+    private func deleteImageAfterCaret() -> Bool {
+        let selectedRange = textView.selectedRange()
+        guard selectedRange.length == 0,
+              let line = lineInfo(at: selectedRange.location),
+              imageReference(in: line.text) != nil,
+              selectedRange.location >= line.contentRange.location,
+              selectedRange.location < NSMaxRange(line.contentRange)
+        else {
+            return false
+        }
+
+        return deleteImageLine(line)
+    }
+
+    private func deleteImageLine(_ line: DisplayLineInfo) -> Bool {
+        let infos = lineInfos()
+        let deleteRange: NSRange
+        let selectedRangeAfterDelete: NSRange
+
+        if infos.count <= 1 {
+            deleteRange = line.contentRange
+            selectedRangeAfterDelete = NSRange(location: line.contentRange.location, length: 0)
+        } else if line.index < infos.count - 1 {
+            deleteRange = line.lineRange
+            selectedRangeAfterDelete = NSRange(location: line.lineRange.location, length: 0)
+        } else {
+            let previousNewlineLocation = max(0, line.lineRange.location - 1)
+            deleteRange = NSRange(
+                location: previousNewlineLocation,
+                length: NSMaxRange(line.contentRange) - previousNewlineLocation
+            )
+            selectedRangeAfterDelete = NSRange(location: previousNewlineLocation, length: 0)
+        }
+
+        return applyTextStorageEdit(
+            range: deleteRange,
+            replacement: "",
+            selectedRange: selectedRangeAfterDelete
+        ) {
+            if infos.count <= 1 {
+                lineKinds = [.normal]
+            } else if lineKinds.indices.contains(line.index) {
+                lineKinds.remove(at: line.index)
+            }
+        }
+    }
+
+    private func moveAcrossImageIfNeeded(direction: HorizontalMovementDirection) -> Bool {
+        let selectedRange = textView.selectedRange()
+        guard selectedRange.length == 0,
+              let line = lineInfo(at: selectedRange.location),
+              imageReference(in: line.text) != nil
+        else {
+            return false
+        }
+
+        let start = line.contentRange.location
+        let end = NSMaxRange(line.contentRange)
+        let targetLocation: Int?
+
+        switch direction {
+        case .right:
+            targetLocation = selectedRange.location >= start && selectedRange.location < end ? end : nil
+        case .left:
+            targetLocation = selectedRange.location > start && selectedRange.location <= end ? start : nil
+        }
+
+        guard let targetLocation else {
+            return false
+        }
+
+        textView.setSelectedRange(NSRange(location: targetLocation, length: 0))
+        applyDisplayAttributes()
+        refreshOverlay()
+        return true
+    }
+
+    @discardableResult
+    private func snapSelectionAroundImageIfNeeded() -> Bool {
+        let selectedRange = textView.selectedRange()
+        guard selectedRange.length == 0,
+              let line = lineInfo(at: selectedRange.location),
+              imageReference(in: line.text) != nil,
+              selectedRange.location > line.contentRange.location,
+              selectedRange.location < NSMaxRange(line.contentRange)
+        else {
+            return false
+        }
+
+        let midpoint = line.contentRange.location + line.contentRange.length / 2
+        let targetLocation = selectedRange.location <= midpoint
+            ? line.contentRange.location
+            : NSMaxRange(line.contentRange)
+        textView.setSelectedRange(NSRange(location: targetLocation, length: 0))
+        return true
     }
 
     private func deleteSelectionPreservingLineKinds() -> Bool {
@@ -730,6 +906,92 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
                 lineKinds.remove(at: line.index)
             }
         }
+    }
+
+    private func pasteImageFromPasteboard() -> Bool {
+        let pasteboard = NSPasteboard.general
+        guard let image = Self.image(from: pasteboard) else {
+            return false
+        }
+
+        do {
+            let attachmentPath = try AttachmentStore.savePastedImage(image, dateKey: dateKey)
+            return insertMarkdownImage(path: attachmentPath)
+        } catch {
+            NSSound.beep()
+            return true
+        }
+    }
+
+    private static func canPasteImage(from pasteboard: NSPasteboard) -> Bool {
+        image(from: pasteboard) != nil
+    }
+
+    private static func image(from pasteboard: NSPasteboard) -> NSImage? {
+        if let pngData = pasteboard.data(forType: .png),
+           let image = NSImage(data: pngData) {
+            return image
+        }
+
+        if let tiffData = pasteboard.data(forType: .tiff),
+           let image = NSImage(data: tiffData) {
+            return image
+        }
+
+        if let image = NSImage(pasteboard: pasteboard) {
+            return image
+        }
+
+        if let fileURL = pasteboard.readObjects(
+            forClasses: [NSURL.self],
+            options: [.urlReadingFileURLsOnly: true]
+        )?.first as? URL,
+            let image = NSImage(contentsOf: fileURL) {
+            return image
+        }
+
+        return nil
+    }
+
+    private func insertMarkdownImage(path: String) -> Bool {
+        let selectedRange = textView.selectedRange()
+        let nsText = textView.string as NSString
+        let line = "![Screenshot](\(path))"
+        let replacement = imageMarkdownReplacement(line, in: nsText, selectedRange: selectedRange)
+        let document = Self.displayDocument(from: replacement)
+        let replacementLength = (document.text as NSString).length
+        let replacesWholeDocument = isFullTextRange(selectedRange)
+            || (nsText.length == 0 && selectedRange.length == 0)
+
+        return applyTextStorageEdit(
+            range: selectedRange,
+            replacement: document.text,
+            selectedRange: NSRange(location: selectedRange.location + replacementLength, length: 0)
+        ) {
+            if replacesWholeDocument {
+                lineKinds = document.lineKinds
+            } else {
+                replaceLineKindsForPaste(in: selectedRange, with: document.lineKinds)
+            }
+        }
+    }
+
+    private func imageMarkdownReplacement(
+        _ markdownLine: String,
+        in text: NSString,
+        selectedRange: NSRange
+    ) -> String {
+        guard text.length > 0 else {
+            return markdownLine
+        }
+
+        let selectionEnd = NSMaxRange(selectedRange)
+        let needsLeadingNewline = selectedRange.location > 0
+            && text.substring(with: NSRange(location: selectedRange.location - 1, length: 1)) != "\n"
+        let needsTrailingNewline = selectionEnd < text.length
+            && text.substring(with: NSRange(location: selectionEnd, length: 1)) != "\n"
+
+        return "\(needsLeadingNewline ? "\n" : "")\(markdownLine)\(needsTrailingNewline ? "\n" : "")"
     }
 
     private func pasteMarkdownTasksFromPasteboard() -> Bool {
@@ -1013,6 +1275,8 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
 
     private func refreshOverlay() {
         overlayView.setItems([])
+        imageOverlayView.setItems([], caret: nil)
+        updateInsertionPointColor(showCustomImageCaret: false)
 
         guard let layoutManager = textView.layoutManager,
               let textContainer = textView.textContainer
@@ -1025,14 +1289,51 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         let visibleBounds = scrollView.contentView.bounds
         let textContainerOrigin = textView.textContainerOrigin
         var checkboxItems: [TodoCheckboxOverlayItem] = []
-
-        for line in lineInfos() where kind(at: line.index).isTask {
+        var imageItems: [MarkdownImageOverlayItem] = []
+        var imageCaret: MarkdownImageCaretItem?
+        let selectedRange = textView.selectedRange()
+        for line in lineInfos() {
             guard let lineRect = lineFragmentRect(for: line, layoutManager: layoutManager) else {
                 continue
             }
 
             let y = textContainerOrigin.y + lineRect.minY - visibleBounds.origin.y + 1
-            guard y > -24, y < bounds.height + 24 else {
+
+            if let reference = imageReference(in: line.text),
+               let image = image(for: reference) {
+                let previewSize = imagePreviewSize(for: image)
+                let imageY = textContainerOrigin.y + lineRect.minY - visibleBounds.origin.y + 6
+                let imageFrame = NSRect(
+                    x: max(0, textContainerOrigin.x - visibleBounds.origin.x),
+                    y: imageY,
+                    width: previewSize.width,
+                    height: previewSize.height
+                )
+                if imageY > -previewSize.height - 24, imageY < bounds.height + 24 {
+                    imageItems.append(
+                        MarkdownImageOverlayItem(
+                            image: image,
+                            altText: reference.altText,
+                            frame: imageFrame
+                        )
+                    )
+                }
+
+                if selectedRange.length == 0,
+                   imageCaret == nil,
+                   selectedRange.location == line.contentRange.location
+                    || selectedRange.location == NSMaxRange(line.contentRange) {
+                    let edge: ImageCaretEdge = selectedRange.location == line.contentRange.location
+                        ? .leading
+                        : .trailing
+                    imageCaret = imageCaretItem(edge: edge, imageFrame: imageFrame)
+                }
+            }
+
+            guard kind(at: line.index).isTask,
+                  y > -24,
+                  y < bounds.height + 24
+            else {
                 continue
             }
 
@@ -1059,10 +1360,32 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             )
         }
 
+        imageOverlayView.setItems(imageItems, caret: imageCaret)
+        updateInsertionPointColor(showCustomImageCaret: imageCaret != nil)
         overlayView.setItems(checkboxItems)
         textView.checkboxCursorRects = overlayView.clickTargetRects().map {
             textView.convert($0, from: overlayView)
         }
+    }
+
+    private func imageCaretItem(edge: ImageCaretEdge, imageFrame: NSRect) -> MarkdownImageCaretItem {
+        let caretHeight = min(42, max(lineHeight() * 1.8, 28))
+        let x: CGFloat
+        switch edge {
+        case .leading:
+            x = imageFrame.minX - 4
+        case .trailing:
+            x = imageFrame.maxX + 4
+        }
+
+        return MarkdownImageCaretItem(
+            frame: NSRect(
+                x: x,
+                y: imageFrame.minY + max(0, (imageFrame.height - caretHeight) / 2),
+                width: 2,
+                height: caretHeight
+            )
+        )
     }
 
     private func applyDisplayAttributes() {
@@ -1146,9 +1469,20 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             let paragraphRange = paragraphAttributeRange(for: line)
             textStorage.addAttribute(
                 .paragraphStyle,
-                value: paragraphStyle(for: lineKind),
+                value: paragraphStyle(for: line),
                 range: paragraphRange
             )
+
+            if imageReference(in: line.text) != nil,
+               line.contentRange.length > 0 {
+                textStorage.addAttributes(
+                    [
+                        .foregroundColor: NSColor.clear,
+                        .font: hiddenSyntaxFont()
+                    ],
+                    range: line.contentRange
+                )
+            }
 
             if case .task(_, let isCompleted) = lineKind,
                isCompleted,
@@ -1211,8 +1545,26 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         }
 
         var attributes = baseAttributes()
-        attributes[.paragraphStyle] = paragraphStyle(for: kind(at: line.index))
+        attributes[.paragraphStyle] = paragraphStyle(for: line)
         textView.typingAttributes = attributes
+    }
+
+    private func paragraphStyle(for line: DisplayLineInfo) -> NSParagraphStyle {
+        let kind = kind(at: line.index)
+        let style = NSMutableParagraphStyle()
+        let textIndent: CGFloat
+        switch kind {
+        case .normal:
+            textIndent = 0
+        case .task(let indentColumns, _), .continuation(let indentColumns):
+            textIndent = taskTextIndent(for: indentColumns)
+        }
+
+        style.firstLineHeadIndent = textIndent
+        style.headIndent = textIndent
+        style.minimumLineHeight = max(lineHeight(), imagePreviewLineHeight(for: line))
+        style.lineBreakMode = .byWordWrapping
+        return style
     }
 
     private func paragraphStyle(for kind: LineKind) -> NSParagraphStyle {
@@ -1330,6 +1682,65 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
 
     private func taskTextIndent(for indentColumns: Int) -> CGFloat {
         taskCheckboxIndent(for: indentColumns) + TodoLayout.taskTextOffset
+    }
+
+    private func imageReference(in lineText: String) -> MarkdownImageReference? {
+        let nsText = lineText as NSString
+        let fullRange = NSRange(location: 0, length: nsText.length)
+        guard let match = Self.markdownImageLineRegex.firstMatch(
+            in: lineText,
+            options: [],
+            range: fullRange
+        ),
+            match.numberOfRanges >= 3
+        else {
+            return nil
+        }
+
+        return MarkdownImageReference(
+            altText: nsText.substring(with: match.range(at: 1)),
+            path: nsText.substring(with: match.range(at: 2))
+        )
+    }
+
+    private func image(for reference: MarkdownImageReference) -> NSImage? {
+        if let cachedImage = imageCache[reference.path] {
+            return cachedImage
+        }
+
+        guard let url = AttachmentStore.imageURL(for: reference.path),
+              let image = NSImage(contentsOf: url)
+        else {
+            return nil
+        }
+
+        imageCache[reference.path] = image
+        return image
+    }
+
+    private func imagePreviewSize(for image: NSImage) -> NSSize {
+        let maxWidth = max(120, textView.bounds.width - textView.textContainerInset.width * 2)
+        let maxHeight: CGFloat = 360
+        let imageSize = image.size
+        guard imageSize.width > 0, imageSize.height > 0 else {
+            return NSSize(width: maxWidth, height: 180)
+        }
+
+        let scale = min(maxWidth / imageSize.width, maxHeight / imageSize.height, 1)
+        return NSSize(
+            width: floor(imageSize.width * scale),
+            height: floor(imageSize.height * scale)
+        )
+    }
+
+    private func imagePreviewLineHeight(for line: DisplayLineInfo) -> CGFloat {
+        guard let reference = imageReference(in: line.text),
+              let image = image(for: reference)
+        else {
+            return lineHeight()
+        }
+
+        return imagePreviewSize(for: image).height + 12
     }
 
     private func kind(at index: Int) -> LineKind {
@@ -1658,12 +2069,17 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     private static let typedTaskSeparatorRegex = try! NSRegularExpression(
         pattern: #"^[ \t]*[-*+][ \t]+\[[ xX]\][ \t]+.*$"#
     )
+
+    private static let markdownImageLineRegex = try! NSRegularExpression(
+        pattern: #"^!\[([^\]]*)\]\(([^)\s]+)\)$"#
+    )
 }
 
 private final class TodoTextView: NSTextView {
     var copyHandler: (() -> Bool)?
     var cutHandler: (() -> Bool)?
     var pasteHandler: (() -> Bool)?
+    var canPasteHandler: (() -> Bool)?
     var checkboxMouseDownHandler: ((NSEvent) -> Bool)?
     var checkboxCursorRects: [NSRect] = [] {
         didSet {
@@ -1694,6 +2110,15 @@ private final class TodoTextView: NSTextView {
         }
 
         super.paste(sender)
+    }
+
+    override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        if item.action == #selector(paste(_:)),
+           canPasteHandler?() == true {
+            return true
+        }
+
+        return super.validateUserInterfaceItem(item)
     }
 
     override func keyDown(with event: NSEvent) {
@@ -1780,6 +2205,78 @@ private struct TodoCheckboxOverlayItem {
     var lineIndex: Int
 }
 
+private struct MarkdownImageOverlayItem {
+    var image: NSImage
+    var altText: String
+    var frame: NSRect
+}
+
+private struct MarkdownImageCaretItem {
+    var frame: NSRect
+}
+
+private final class MarkdownImageOverlayView: NSView {
+    var palette: AppTheme.Palette = AppTheme.yellow {
+        didSet {
+            needsDisplay = true
+        }
+    }
+
+    private var items: [MarkdownImageOverlayItem] = []
+    private var caret: MarkdownImageCaretItem?
+
+    override var isFlipped: Bool {
+        true
+    }
+
+    func setItems(_ items: [MarkdownImageOverlayItem], caret: MarkdownImageCaretItem?) {
+        self.items = items
+        self.caret = caret
+        needsDisplay = true
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        nil
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+
+        for item in items {
+            drawImage(item)
+        }
+
+        if let caret {
+            drawCaret(caret)
+        }
+    }
+
+    private func drawImage(_ item: MarkdownImageOverlayItem) {
+        let borderPath = NSBezierPath(roundedRect: item.frame, xRadius: 6, yRadius: 6)
+        NSGraphicsContext.saveGraphicsState()
+        borderPath.addClip()
+        item.image.draw(
+            in: item.frame,
+            from: .zero,
+            operation: .sourceOver,
+            fraction: 1,
+            respectFlipped: true,
+            hints: [.interpolation: NSImageInterpolation.high]
+        )
+        NSGraphicsContext.restoreGraphicsState()
+
+        palette.checkboxBorderNS.withAlphaComponent(0.35).setStroke()
+        borderPath.lineWidth = 1
+        borderPath.stroke()
+    }
+
+    private func drawCaret(_ item: MarkdownImageCaretItem) {
+        let path = NSBezierPath(roundedRect: item.frame, xRadius: 1, yRadius: 1)
+        palette.accentNS.setFill()
+        path.fill()
+    }
+}
+
 private final class TodoCheckboxOverlayView: NSView {
     var palette: AppTheme.Palette = AppTheme.yellow {
         didSet {
@@ -1839,7 +2336,7 @@ private final class TodoCheckboxOverlayView: NSView {
         )
 
         let boxPath = NSBezierPath(roundedRect: boxRect, xRadius: 3.5, yRadius: 3.5)
-        (item.isChecked ? palette.accentNS : palette.checkboxUncheckedNS).setFill()
+        (item.isChecked ? palette.checkboxCheckedNS : palette.checkboxUncheckedNS).setFill()
         boxPath.fill()
 
         palette.checkboxBorderNS.setStroke()

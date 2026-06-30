@@ -19,6 +19,7 @@ enum AppTheme {
         let accentNS: NSColor
         let codeBackgroundNS: NSColor
         let strikethroughNS: NSColor
+        let checkboxCheckedNS: NSColor
         let checkboxUncheckedNS: NSColor
         let checkboxBorderNS: NSColor
         let checkboxCheckmarkNS: NSColor
@@ -45,6 +46,7 @@ enum AppTheme {
         accentNS: NSColor(calibratedRed: 0.16, green: 0.34, blue: 0.42, alpha: 1),
         codeBackgroundNS: NSColor(calibratedRed: 1.0, green: 0.92, blue: 0.62, alpha: 0.72),
         strikethroughNS: NSColor(calibratedRed: 0.43, green: 0.37, blue: 0.30, alpha: 1),
+        checkboxCheckedNS: NSColor(calibratedRed: 0.12, green: 0.55, blue: 0.49, alpha: 1),
         checkboxUncheckedNS: NSColor(calibratedWhite: 1.0, alpha: 0.82),
         checkboxBorderNS: NSColor(calibratedRed: 0.40, green: 0.35, blue: 0.20, alpha: 0.56),
         checkboxCheckmarkNS: .white
@@ -67,6 +69,7 @@ enum AppTheme {
         accentNS: NSColor(calibratedRed: 0.13, green: 0.34, blue: 0.42, alpha: 1),
         codeBackgroundNS: NSColor(calibratedRed: 0.88, green: 0.91, blue: 0.86, alpha: 0.86),
         strikethroughNS: NSColor(calibratedRed: 0.42, green: 0.45, blue: 0.42, alpha: 1),
+        checkboxCheckedNS: NSColor(calibratedRed: 0.13, green: 0.34, blue: 0.42, alpha: 1),
         checkboxUncheckedNS: NSColor(calibratedWhite: 1.0, alpha: 0.9),
         checkboxBorderNS: NSColor(calibratedRed: 0.45, green: 0.48, blue: 0.45, alpha: 0.68),
         checkboxCheckmarkNS: .white
@@ -89,6 +92,7 @@ enum AppTheme {
         accentNS: NSColor(calibratedRed: 0.46, green: 0.75, blue: 0.78, alpha: 1),
         codeBackgroundNS: NSColor(calibratedRed: 0.23, green: 0.27, blue: 0.24, alpha: 0.95),
         strikethroughNS: NSColor(calibratedRed: 0.58, green: 0.59, blue: 0.54, alpha: 1),
+        checkboxCheckedNS: NSColor(calibratedRed: 0.46, green: 0.75, blue: 0.78, alpha: 1),
         checkboxUncheckedNS: NSColor(calibratedWhite: 0.08, alpha: 0.88),
         checkboxBorderNS: NSColor(calibratedRed: 0.72, green: 0.72, blue: 0.66, alpha: 0.70),
         checkboxCheckmarkNS: .white
