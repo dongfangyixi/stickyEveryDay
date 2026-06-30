@@ -137,6 +137,7 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     private struct MarkdownImageReference {
         var altText: String
         var path: String
+        var width: CGFloat?
     }
 
     private enum HorizontalMovementDirection {
@@ -176,6 +177,7 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     private var palette: AppTheme.Palette
     private var dateKey: String
     private var imageCache: [String: NSImage] = [:]
+    private var resizingImagePreview: (lineIndex: Int, width: CGFloat)?
     private var lineKinds: [LineKind] = [.normal]
     private var isApplyingProgrammaticChange = false
     private var isRestoringUndoSnapshot = false
@@ -440,6 +442,9 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         }
         textView.canPasteHandler = {
             Self.canPasteImage(from: .general) || NSPasteboard.general.string(forType: .string) != nil
+        }
+        textView.imageMouseDownHandler = { [weak self] event in
+            self?.handleImageMouseDown(event) ?? false
         }
         textView.checkboxMouseDownHandler = { [weak self] event in
             self?.handleCheckboxMouseDown(event) ?? false
@@ -1105,6 +1110,98 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         return true
     }
 
+    private func handleImageMouseDown(_ event: NSEvent) -> Bool {
+        let point = imageOverlayView.convert(event.locationInWindow, from: nil)
+        if let item = imageOverlayView.resizeTarget(at: point) {
+            return resizeImage(item, from: point)
+        }
+
+        guard let item = imageOverlayView.imageTarget(at: point) else {
+            return false
+        }
+
+        selectImage(item, at: point)
+        return true
+    }
+
+    private func selectImage(_ item: MarkdownImageOverlayItem, at point: NSPoint) {
+        let infos = lineInfos()
+        guard infos.indices.contains(item.lineIndex) else {
+            return
+        }
+
+        let line = infos[item.lineIndex]
+        let targetLocation = point.x <= item.frame.midX
+            ? line.contentRange.location
+            : NSMaxRange(line.contentRange)
+        textView.window?.makeFirstResponder(textView)
+        textView.setSelectedRange(NSRange(location: targetLocation, length: 0))
+        refreshEditor()
+    }
+
+    private func resizeImage(_ item: MarkdownImageOverlayItem, from point: NSPoint) -> Bool {
+        let startPoint = point
+        let startWidth = item.frame.width
+        let minWidth: CGFloat = 80
+        let maxWidth = max(minWidth, textView.bounds.width - textView.textContainerInset.width * 2)
+        var currentWidth = startWidth
+
+        resizingImagePreview = (lineIndex: item.lineIndex, width: currentWidth)
+        refreshEditor()
+
+        while let nextEvent = window?.nextEvent(
+            matching: [.leftMouseDragged, .leftMouseUp],
+            until: .distantFuture,
+            inMode: .eventTracking,
+            dequeue: true
+        ) {
+            let currentPoint = imageOverlayView.convert(nextEvent.locationInWindow, from: nil)
+            currentWidth = max(minWidth, min(maxWidth, startWidth + currentPoint.x - startPoint.x))
+
+            if nextEvent.type == .leftMouseDragged {
+                resizingImagePreview = (lineIndex: item.lineIndex, width: currentWidth)
+                refreshEditor()
+                continue
+            }
+
+            resizingImagePreview = nil
+            updateImageWidth(currentWidth, lineIndex: item.lineIndex)
+            return true
+        }
+
+        resizingImagePreview = nil
+        refreshEditor()
+        return true
+    }
+
+    private func updateImageWidth(_ width: CGFloat, lineIndex: Int) {
+        let infos = lineInfos()
+        guard infos.indices.contains(lineIndex),
+              let reference = imageReference(in: infos[lineIndex].text)
+        else {
+            refreshEditor()
+            return
+        }
+
+        let line = infos[lineIndex]
+        let replacement = markdownImageLine(for: reference, width: width)
+        let selectedRange = textView.selectedRange()
+        let selectedLocation: Int
+        if selectedRange.location <= line.contentRange.location {
+            selectedLocation = line.contentRange.location
+        } else {
+            selectedLocation = line.contentRange.location + (replacement as NSString).length
+        }
+
+        _ = applyTextStorageEdit(
+            range: line.contentRange,
+            replacement: replacement,
+            selectedRange: NSRange(location: selectedLocation, length: 0)
+        ) {
+            lineKinds = normalizedLineKinds(lineKinds, for: textView.string)
+        }
+    }
+
     private func editorSnapshot() -> EditorSnapshot {
         EditorSnapshot(
             text: textView.string,
@@ -1301,7 +1398,7 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
 
             if let reference = imageReference(in: line.text),
                let image = image(for: reference) {
-                let previewSize = imagePreviewSize(for: image)
+                let previewSize = imagePreviewSize(for: image, reference: reference, lineIndex: line.index)
                 let imageY = textContainerOrigin.y + lineRect.minY - visibleBounds.origin.y + 6
                 let imageFrame = NSRect(
                     x: max(0, textContainerOrigin.x - visibleBounds.origin.x),
@@ -1310,11 +1407,16 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
                     height: previewSize.height
                 )
                 if imageY > -previewSize.height - 24, imageY < bounds.height + 24 {
+                    let isSelected = selectedRange.length == 0
+                        && selectedRange.location >= line.contentRange.location
+                        && selectedRange.location <= NSMaxRange(line.contentRange)
                     imageItems.append(
                         MarkdownImageOverlayItem(
                             image: image,
                             altText: reference.altText,
-                            frame: imageFrame
+                            frame: imageFrame,
+                            lineIndex: line.index,
+                            isSelected: isSelected
                         )
                     )
                 }
@@ -1362,6 +1464,9 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
 
         imageOverlayView.setItems(imageItems, caret: imageCaret)
         updateInsertionPointColor(showCustomImageCaret: imageCaret != nil)
+        textView.imageResizeCursorRects = imageOverlayView.resizeHandleRects().map {
+            textView.convert($0, from: imageOverlayView)
+        }
         overlayView.setItems(checkboxItems)
         textView.checkboxCursorRects = overlayView.clickTargetRects().map {
             textView.convert($0, from: overlayView)
@@ -1697,10 +1802,30 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             return nil
         }
 
+        let width: CGFloat?
+        if match.numberOfRanges >= 4,
+           match.range(at: 3).location != NSNotFound {
+            width = CGFloat((nsText.substring(with: match.range(at: 3)) as NSString).doubleValue)
+        } else {
+            width = nil
+        }
+
         return MarkdownImageReference(
             altText: nsText.substring(with: match.range(at: 1)),
-            path: nsText.substring(with: match.range(at: 2))
+            path: nsText.substring(with: match.range(at: 2)),
+            width: width
         )
+    }
+
+    private func markdownImageLine(for reference: MarkdownImageReference, width: CGFloat?) -> String {
+        let widthSuffix: String
+        if let width {
+            widthSuffix = "{width=\(max(1, Int(round(width))))}"
+        } else {
+            widthSuffix = ""
+        }
+
+        return "![\(reference.altText)](\(reference.path))\(widthSuffix)"
     }
 
     private func image(for reference: MarkdownImageReference) -> NSImage? {
@@ -1718,7 +1843,11 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         return image
     }
 
-    private func imagePreviewSize(for image: NSImage) -> NSSize {
+    private func imagePreviewSize(
+        for image: NSImage,
+        reference: MarkdownImageReference,
+        lineIndex: Int
+    ) -> NSSize {
         let maxWidth = max(120, textView.bounds.width - textView.textContainerInset.width * 2)
         let maxHeight: CGFloat = 360
         let imageSize = image.size
@@ -1726,7 +1855,15 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             return NSSize(width: maxWidth, height: 180)
         }
 
-        let scale = min(maxWidth / imageSize.width, maxHeight / imageSize.height, 1)
+        let explicitWidth = resizingImagePreview?.lineIndex == lineIndex
+            ? resizingImagePreview?.width
+            : reference.width
+        let targetWidth = explicitWidth.map { max(80, min($0, maxWidth)) }
+        let scale = min(
+            (targetWidth ?? imageSize.width) / imageSize.width,
+            maxWidth / imageSize.width,
+            maxHeight / imageSize.height
+        )
         return NSSize(
             width: floor(imageSize.width * scale),
             height: floor(imageSize.height * scale)
@@ -1740,7 +1877,7 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             return lineHeight()
         }
 
-        return imagePreviewSize(for: image).height + 12
+        return imagePreviewSize(for: image, reference: reference, lineIndex: line.index).height + 12
     }
 
     private func kind(at index: Int) -> LineKind {
@@ -2071,7 +2208,7 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     )
 
     private static let markdownImageLineRegex = try! NSRegularExpression(
-        pattern: #"^!\[([^\]]*)\]\(([^)\s]+)\)$"#
+        pattern: #"^!\[([^\]]*)\]\(([^)\s]+)\)(?:\{width=(\d+(?:\.\d+)?)\})?$"#
     )
 }
 
@@ -2080,7 +2217,13 @@ private final class TodoTextView: NSTextView {
     var cutHandler: (() -> Bool)?
     var pasteHandler: (() -> Bool)?
     var canPasteHandler: (() -> Bool)?
+    var imageMouseDownHandler: ((NSEvent) -> Bool)?
     var checkboxMouseDownHandler: ((NSEvent) -> Bool)?
+    var imageResizeCursorRects: [NSRect] = [] {
+        didSet {
+            window?.invalidateCursorRects(for: self)
+        }
+    }
     var checkboxCursorRects: [NSRect] = [] {
         didSet {
             window?.invalidateCursorRects(for: self)
@@ -2157,6 +2300,10 @@ private final class TodoTextView: NSTextView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        if imageMouseDownHandler?(event) == true {
+            return
+        }
+
         if checkboxMouseDownHandler?(event) == true {
             return
         }
@@ -2182,6 +2329,11 @@ private final class TodoTextView: NSTextView {
 
     override func mouseMoved(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
+        if imageResizeCursorRects.contains(where: { $0.contains(point) }) {
+            NSCursor.resizeLeftRight.set()
+            return
+        }
+
         if checkboxCursorRects.contains(where: { $0.contains(point) }) {
             NSCursor.pointingHand.set()
             return
@@ -2196,6 +2348,10 @@ private final class TodoTextView: NSTextView {
         for rect in checkboxCursorRects {
             addCursorRect(rect, cursor: .pointingHand)
         }
+
+        for rect in imageResizeCursorRects {
+            addCursorRect(rect, cursor: .resizeLeftRight)
+        }
     }
 }
 
@@ -2209,6 +2365,8 @@ private struct MarkdownImageOverlayItem {
     var image: NSImage
     var altText: String
     var frame: NSRect
+    var lineIndex: Int
+    var isSelected: Bool
 }
 
 private struct MarkdownImageCaretItem {
@@ -2233,6 +2391,18 @@ private final class MarkdownImageOverlayView: NSView {
         self.items = items
         self.caret = caret
         needsDisplay = true
+    }
+
+    func resizeTarget(at point: NSPoint) -> MarkdownImageOverlayItem? {
+        items.first { $0.isSelected && resizeHandleRect(for: $0).contains(point) }
+    }
+
+    func imageTarget(at point: NSPoint) -> MarkdownImageOverlayItem? {
+        items.first { $0.frame.contains(point) }
+    }
+
+    func resizeHandleRects() -> [NSRect] {
+        items.filter(\.isSelected).map { resizeHandleRect(for: $0) }
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
@@ -2265,15 +2435,55 @@ private final class MarkdownImageOverlayView: NSView {
         )
         NSGraphicsContext.restoreGraphicsState()
 
-        palette.checkboxBorderNS.withAlphaComponent(0.35).setStroke()
-        borderPath.lineWidth = 1
+        (item.isSelected ? palette.accentNS : palette.checkboxBorderNS)
+            .withAlphaComponent(item.isSelected ? 0.78 : 0.35)
+            .setStroke()
+        borderPath.lineWidth = item.isSelected ? 2 : 1
         borderPath.stroke()
+
+        if item.isSelected {
+            drawResizeHandle(for: item)
+        }
     }
 
     private func drawCaret(_ item: MarkdownImageCaretItem) {
         let path = NSBezierPath(roundedRect: item.frame, xRadius: 1, yRadius: 1)
         palette.accentNS.setFill()
         path.fill()
+    }
+
+    private func resizeHandleRect(for item: MarkdownImageOverlayItem) -> NSRect {
+        NSRect(
+            x: item.frame.maxX - 8,
+            y: item.frame.midY - 15,
+            width: 16,
+            height: 30
+        )
+    }
+
+    private func drawResizeHandle(for item: MarkdownImageOverlayItem) {
+        let rect = resizeHandleRect(for: item)
+        let visibleRect = NSRect(
+            x: rect.midX - 4,
+            y: rect.minY + 4,
+            width: 8,
+            height: rect.height - 8
+        )
+        let handlePath = NSBezierPath(roundedRect: visibleRect, xRadius: 4, yRadius: 4)
+        NSColor.white.withAlphaComponent(0.92).setFill()
+        handlePath.fill()
+        palette.accentNS.withAlphaComponent(0.72).setStroke()
+        handlePath.lineWidth = 1
+        handlePath.stroke()
+
+        palette.accentNS.withAlphaComponent(0.5).setStroke()
+        for offset in [-1.5, 1.5] {
+            let linePath = NSBezierPath()
+            linePath.move(to: NSPoint(x: visibleRect.midX + offset, y: visibleRect.minY + 5))
+            linePath.line(to: NSPoint(x: visibleRect.midX + offset, y: visibleRect.maxY - 5))
+            linePath.lineWidth = 1
+            linePath.stroke()
+        }
     }
 }
 
