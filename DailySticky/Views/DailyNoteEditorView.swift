@@ -93,13 +93,20 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     private enum LineKind: Equatable {
         case normal
         case task(indentColumns: Int, isCompleted: Bool)
+        case bullet(indentColumns: Int)
+        case numbered(indentColumns: Int, number: Int)
+        case quote
+        case codeBlock
         case continuation(indentColumns: Int)
 
         var indentColumns: Int {
             switch self {
-            case .normal:
+            case .normal, .quote, .codeBlock:
                 return 0
-            case .task(let indentColumns, _), .continuation(let indentColumns):
+            case .task(let indentColumns, _),
+                 .bullet(let indentColumns),
+                 .numbered(let indentColumns, _),
+                 .continuation(let indentColumns):
                 return indentColumns
             }
         }
@@ -116,7 +123,16 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             switch self {
             case .normal:
                 return false
-            case .task, .continuation:
+            case .task, .bullet, .numbered, .quote, .codeBlock, .continuation:
+                return true
+            }
+        }
+
+        var supportsSoftLineBreak: Bool {
+            switch self {
+            case .normal:
+                return false
+            case .task, .bullet, .numbered, .quote, .codeBlock, .continuation:
                 return true
             }
         }
@@ -150,6 +166,101 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         case trailing
     }
 
+    private enum SlashCommand: String, CaseIterable {
+        case todo
+        case heading1
+        case heading2
+        case heading3
+        case heading4
+        case bulletedList
+        case numberedList
+        case quote
+        case codeBlock
+
+        var title: String {
+            switch self {
+            case .todo:
+                return "Todo list"
+            case .heading1:
+                return "Heading 1"
+            case .heading2:
+                return "Heading 2"
+            case .heading3:
+                return "Heading 3"
+            case .heading4:
+                return "Heading 4"
+            case .bulletedList:
+                return "Bulleted list"
+            case .numberedList:
+                return "Numbered list"
+            case .quote:
+                return "Quote"
+            case .codeBlock:
+                return "Code block"
+            }
+        }
+
+        var prefix: String {
+            switch self {
+            case .todo:
+                return ""
+            case .heading1:
+                return "# "
+            case .heading2:
+                return "## "
+            case .heading3:
+                return "### "
+            case .heading4:
+                return "#### "
+            case .bulletedList:
+                return "- "
+            case .numberedList:
+                return "1. "
+            case .quote:
+                return "> "
+            case .codeBlock:
+                return "```\n\n```"
+            }
+        }
+
+        func matches(query: String) -> Bool {
+            let normalizedQuery = query
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+
+            guard !normalizedQuery.isEmpty else {
+                return self == .todo
+            }
+
+            switch self {
+            case .todo:
+                return ["todo", "task", "check", "checkbox"].contains(normalizedQuery)
+            case .heading1:
+                return ["h1", "heading1", "heading 1", "title"].contains(normalizedQuery)
+            case .heading2:
+                return ["h2", "heading2", "heading 2"].contains(normalizedQuery)
+            case .heading3:
+                return ["h3", "heading3", "heading 3"].contains(normalizedQuery)
+            case .heading4:
+                return ["h4", "heading4", "heading 4"].contains(normalizedQuery)
+            case .bulletedList:
+                return ["bullet", "bulleted", "bulletedlist", "bulleted list", "ul", "list"].contains(normalizedQuery)
+            case .numberedList:
+                return ["number", "numbered", "numberedlist", "numbered list", "ol"].contains(normalizedQuery)
+            case .quote:
+                return ["quote", "blockquote"].contains(normalizedQuery)
+            case .codeBlock:
+                return ["code", "codeblock", "code block"].contains(normalizedQuery)
+            }
+        }
+    }
+
+    private struct SlashCommandContext {
+        var slashRange: NSRange
+        var lineIndex: Int
+        var query: String
+    }
+
     private struct EditorSnapshot {
         var text: String
         var lineKinds: [LineKind]
@@ -173,6 +284,7 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     private let textView = TodoTextView()
     private let overlayView = TodoCheckboxOverlayView()
     private let imageOverlayView = MarkdownImageOverlayView()
+    private let slashPaletteView = SlashCommandPaletteView()
     private let baseFont = NSFont.systemFont(ofSize: 14)
     private var palette: AppTheme.Palette
     private var dateKey: String
@@ -186,6 +298,7 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     private var pendingUndoSnapshot: EditorSnapshot?
     private var pendingDefaultTextEdit: PendingDefaultTextEdit?
     private var isRefreshingSelectionDisplay = false
+    private var slashCommandContext: SlashCommandContext?
 
     var onTextChange: ((String) -> Void)?
 
@@ -295,6 +408,7 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
 
         notifyTextChangedAndRefresh(scrollSelection: true)
         registerUndoSnapshotIfChanged(from: undoSnapshot)
+        showSlashCommandMenuIfNeeded()
     }
 
     func textViewDidChangeSelection(_ notification: Notification) {
@@ -308,6 +422,9 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         snapSelectionAroundImageIfNeeded()
         applyDisplayAttributes()
         refreshOverlay()
+        if slashCommandContextForCurrentSelection() == nil {
+            hideSlashCommandPalette()
+        }
         isRefreshingSelectionDisplay = false
     }
 
@@ -336,6 +453,10 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         switch commandSelector {
         case #selector(NSResponder.insertLineBreak(_:)),
              #selector(NSResponder.insertNewline(_:)):
+            if applySlashCommandBeforeReturnIfNeeded() {
+                return true
+            }
+
             if NSApp.currentEvent?.modifierFlags.contains(.shift) == true {
                 return insertSoftLineBreak()
             }
@@ -347,6 +468,14 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
 
         case #selector(NSResponder.insertBacktab(_:)):
             return adjustIndent(by: -4)
+
+        case #selector(NSResponder.cancelOperation(_:)):
+            if slashCommandContext != nil {
+                hideSlashCommandPalette()
+                return true
+            }
+
+            return false
 
         case #selector(NSResponder.deleteBackward(_:)):
             if textView.selectedRange().length > 0 {
@@ -388,6 +517,9 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     override func layout() {
         super.layout()
         refreshOverlay()
+        if slashCommandContext != nil {
+            positionSlashCommandPalette()
+        }
     }
 
     private func configureViews() {
@@ -452,12 +584,26 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
 
         imageOverlayView.translatesAutoresizingMaskIntoConstraints = false
         overlayView.translatesAutoresizingMaskIntoConstraints = false
+        slashPaletteView.configure(
+            commands: SlashCommand.allCases.map { command in
+                (title: command.title, rawValue: command.rawValue)
+            }
+        )
+        slashPaletteView.onSelect = { [weak self] rawValue in
+            guard let command = SlashCommand(rawValue: rawValue) else {
+                return
+            }
+
+            self?.applySlashCommand(command)
+        }
+        slashPaletteView.isHidden = true
         applyTheme()
 
         scrollView.documentView = textView
         addSubview(scrollView)
         addSubview(imageOverlayView)
         addSubview(overlayView)
+        addSubview(slashPaletteView)
 
         NSLayoutConstraint.activate([
             scrollView.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -488,6 +634,7 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         textView.typingAttributes = baseAttributes()
         overlayView.palette = palette
         imageOverlayView.palette = palette
+        slashPaletteView.palette = palette
     }
 
     private func updateInsertionPointColor(showCustomImageCaret: Bool) {
@@ -506,6 +653,19 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             return false
         }
 
+        if line.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           kind(at: line.index).isStructured,
+           case .continuation = kind(at: line.index) {
+            // Continuations are handled below because they need to restore the parent block kind.
+        } else if line.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  kind(at: line.index).isStructured {
+            let undoSnapshot = editorSnapshot()
+            lineKinds[line.index] = .normal
+            notifyTextChangedAndRefresh(scrollSelection: true)
+            registerUndoSnapshotIfChanged(from: undoSnapshot)
+            return true
+        }
+
         switch kind(at: line.index) {
         case .task(let indentColumns, _):
             return insertLineBreak(
@@ -514,10 +674,38 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
                 newLineKind: .task(indentColumns: indentColumns, isCompleted: false)
             )
 
+        case .bullet(let indentColumns):
+            return insertLineBreak(
+                at: selectedRange,
+                afterLineIndex: line.index,
+                newLineKind: .bullet(indentColumns: indentColumns)
+            )
+
+        case .numbered(let indentColumns, let number):
+            return insertLineBreak(
+                at: selectedRange,
+                afterLineIndex: line.index,
+                newLineKind: .numbered(indentColumns: indentColumns, number: number + 1)
+            )
+
+        case .quote:
+            return insertLineBreak(
+                at: selectedRange,
+                afterLineIndex: line.index,
+                newLineKind: .quote
+            )
+
+        case .codeBlock:
+            return insertLineBreak(
+                at: selectedRange,
+                afterLineIndex: line.index,
+                newLineKind: .codeBlock
+            )
+
         case .continuation(let indentColumns):
             if line.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 let undoSnapshot = editorSnapshot()
-                lineKinds[line.index] = .task(indentColumns: indentColumns, isCompleted: false)
+                lineKinds[line.index] = structuredKindAfterContinuation(at: line.index, indentColumns: indentColumns)
                 notifyTextChangedAndRefresh(scrollSelection: true)
                 registerUndoSnapshotIfChanged(from: undoSnapshot)
                 return true
@@ -526,7 +714,7 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             return insertLineBreak(
                 at: selectedRange,
                 afterLineIndex: line.index,
-                newLineKind: .task(indentColumns: indentColumns, isCompleted: false)
+                newLineKind: structuredKindAfterContinuation(at: line.index, indentColumns: indentColumns)
             )
 
         case .normal:
@@ -543,15 +731,45 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         }
 
         switch kind(at: line.index) {
-        case .task(let indentColumns, _), .continuation(let indentColumns):
+        case .codeBlock:
             return insertLineBreak(
                 at: selectedRange,
                 afterLineIndex: line.index,
-                newLineKind: .continuation(indentColumns: indentColumns)
+                newLineKind: .codeBlock
             )
 
-        case .normal:
+        case let kind where kind.supportsSoftLineBreak:
+            return insertLineBreak(
+                at: selectedRange,
+                afterLineIndex: line.index,
+                newLineKind: .continuation(indentColumns: kind.indentColumns)
+            )
+
+        default:
             return false
+        }
+    }
+
+    private func structuredKindAfterContinuation(at lineIndex: Int, indentColumns: Int) -> LineKind {
+        guard lineIndex > 0 else {
+            return .task(indentColumns: indentColumns, isCompleted: false)
+        }
+
+        switch kind(at: lineIndex - 1) {
+        case .task:
+            return .task(indentColumns: indentColumns, isCompleted: false)
+        case .bullet:
+            return .bullet(indentColumns: indentColumns)
+        case .numbered(_, let number):
+            return .numbered(indentColumns: indentColumns, number: number + 1)
+        case .quote:
+            return .quote
+        case .codeBlock:
+            return .codeBlock
+        case .continuation:
+            return structuredKindAfterContinuation(at: lineIndex - 1, indentColumns: indentColumns)
+        case .normal:
+            return .normal
         }
     }
 
@@ -566,6 +784,210 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             selectedRange: NSRange(location: selectedRange.location + 1, length: 0)
         ) {
             lineKinds.insert(newLineKind, at: min(lineIndex + 1, lineKinds.count))
+        }
+    }
+
+    private func showSlashCommandMenuIfNeeded() {
+        guard let context = slashCommandContextForCurrentSelection() else {
+            hideSlashCommandPalette()
+            return
+        }
+
+        slashCommandContext = context
+        positionSlashCommandPalette()
+        slashPaletteView.isHidden = false
+    }
+
+    private func slashCommandContextForCurrentSelection() -> SlashCommandContext? {
+        let selectedRange = textView.selectedRange()
+        guard selectedRange.length == 0,
+              selectedRange.location > 0,
+              let line = lineInfo(at: selectedRange.location)
+        else {
+            return nil
+        }
+
+        let slashLocation = selectedRange.location - 1
+        guard slashLocation >= line.contentRange.location,
+              slashLocation < NSMaxRange(line.contentRange)
+        else {
+            return nil
+        }
+
+        let nsText = textView.string as NSString
+        guard nsText.substring(with: NSRange(location: slashLocation, length: 1)) == "/" else {
+            return nil
+        }
+
+        let textBeforeSlashLength = slashLocation - line.contentRange.location
+        let textBeforeSlash = textBeforeSlashLength > 0
+            ? nsText.substring(with: NSRange(location: line.contentRange.location, length: textBeforeSlashLength))
+            : ""
+        guard textBeforeSlash.trimmingCharacters(in: .whitespaces).isEmpty else {
+            return nil
+        }
+
+        return SlashCommandContext(
+            slashRange: NSRange(
+                location: line.contentRange.location,
+                length: textBeforeSlashLength + 1
+            ),
+            lineIndex: line.index,
+            query: ""
+        )
+    }
+
+    private func slashCommandMenuPoint() -> NSPoint {
+        let selectedRange = textView.selectedRange()
+        let screenRect = textView.firstRect(forCharacterRange: selectedRange, actualRange: nil)
+        guard let window = textView.window else {
+            return NSPoint(x: textView.textContainerInset.width, y: lineHeight())
+        }
+
+        let windowPoint = window.convertPoint(fromScreen: NSPoint(x: screenRect.minX, y: screenRect.minY))
+        let viewPoint = textView.convert(windowPoint, from: nil)
+        return NSPoint(x: max(0, viewPoint.x), y: viewPoint.y + lineHeight())
+    }
+
+    private func positionSlashCommandPalette() {
+        let pointInTextView = slashCommandMenuPoint()
+        let point = convert(pointInTextView, from: textView)
+        let size = slashPaletteView.fittingSize
+        let width = max(184, size.width)
+        let height = max(184, size.height)
+        let x = min(max(8, point.x), max(8, bounds.width - width - 8))
+        let y = min(max(8, point.y - height), max(8, bounds.height - height - 8))
+        slashPaletteView.frame = NSRect(x: x, y: y, width: width, height: height)
+    }
+
+    private func hideSlashCommandPalette() {
+        slashCommandContext = nil
+        slashPaletteView.isHidden = true
+    }
+
+    @objc private func applySlashCommandFromMenu(_ sender: NSMenuItem) {
+        guard let rawValue = sender.representedObject as? String,
+              let command = SlashCommand(rawValue: rawValue)
+        else {
+            return
+        }
+
+        applySlashCommand(command)
+    }
+
+    private func applySlashCommand(_ command: SlashCommand, context providedContext: SlashCommandContext? = nil) {
+        guard let context = providedContext ?? slashCommandContext else {
+            return
+        }
+
+        hideSlashCommandPalette()
+        let infos = lineInfos()
+        guard infos.indices.contains(context.lineIndex),
+              context.slashRange.location >= infos[context.lineIndex].contentRange.location,
+              NSMaxRange(context.slashRange) <= NSMaxRange(infos[context.lineIndex].contentRange)
+        else {
+            return
+        }
+
+        switch command {
+        case .todo:
+            applyStructuredSlashCommand(context, kind: .task(indentColumns: 0, isCompleted: false))
+        case .bulletedList:
+            applyStructuredSlashCommand(context, kind: .bullet(indentColumns: 0))
+        case .numberedList:
+            applyStructuredSlashCommand(context, kind: .numbered(indentColumns: 0, number: 1))
+        case .quote:
+            applyStructuredSlashCommand(context, kind: .quote)
+        case .codeBlock:
+            applyStructuredSlashCommand(context, kind: .codeBlock)
+        default:
+            applyTextSlashCommand(context, replacement: command.prefix, insertedLineKinds: [])
+        }
+    }
+
+    private func applySlashCommandBeforeReturnIfNeeded() -> Bool {
+        guard let context = slashCommandContextForReturn(),
+              let command = SlashCommand.allCases.first(where: { $0.matches(query: context.query) })
+        else {
+            return false
+        }
+
+        applySlashCommand(command, context: context)
+        return true
+    }
+
+    private func slashCommandContextForReturn() -> SlashCommandContext? {
+        let selectedRange = textView.selectedRange()
+        guard selectedRange.length == 0,
+              let line = lineInfo(at: selectedRange.location),
+              selectedRange.location >= line.contentRange.location
+        else {
+            return nil
+        }
+
+        let prefixRange = NSRange(
+            location: line.contentRange.location,
+            length: selectedRange.location - line.contentRange.location
+        )
+        let nsText = textView.string as NSString
+        let prefixText = nsText.substring(with: prefixRange)
+        guard prefixText.hasPrefix("/") else {
+            return nil
+        }
+
+        let query = String(prefixText.dropFirst())
+        guard !query.contains("\n") else {
+            return nil
+        }
+
+        return SlashCommandContext(
+            slashRange: prefixRange,
+            lineIndex: line.index,
+            query: query
+        )
+    }
+
+    private func applyStructuredSlashCommand(_ context: SlashCommandContext, kind: LineKind) {
+        let selectedLocation = context.slashRange.location
+        preservesEmptyStructuredLine = true
+        defer {
+            preservesEmptyStructuredLine = false
+        }
+
+        _ = applyTextStorageEdit(
+            range: context.slashRange,
+            replacement: "",
+            selectedRange: NSRange(location: selectedLocation, length: 0)
+        ) {
+            lineKinds[context.lineIndex] = kind
+        }
+    }
+
+    private func applyTextSlashCommand(
+        _ context: SlashCommandContext,
+        replacement: String,
+        insertedLineKinds: [LineKind]
+    ) {
+        let replacementLength = (replacement as NSString).length
+        let selectedLocation: Int
+        if replacement == "```\n\n```" {
+            selectedLocation = context.slashRange.location + 4
+        } else {
+            selectedLocation = context.slashRange.location + replacementLength
+        }
+
+        _ = applyTextStorageEdit(
+            range: context.slashRange,
+            replacement: replacement,
+            selectedRange: NSRange(location: selectedLocation, length: 0)
+        ) {
+            lineKinds[context.lineIndex] = .normal
+            if !insertedLineKinds.isEmpty {
+                lineKinds.insert(
+                    contentsOf: insertedLineKinds,
+                    at: min(context.lineIndex + 1, lineKinds.count)
+                )
+            }
         }
     }
 
@@ -584,9 +1006,13 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
                 indentColumns: max(0, indentColumns + delta),
                 isCompleted: isCompleted
             )
+        case .bullet(let indentColumns):
+            lineKinds[line.index] = .bullet(indentColumns: max(0, indentColumns + delta))
+        case .numbered(let indentColumns, let number):
+            lineKinds[line.index] = .numbered(indentColumns: max(0, indentColumns + delta), number: number)
         case .continuation(let indentColumns):
             lineKinds[line.index] = .continuation(indentColumns: max(0, indentColumns + delta))
-        case .normal:
+        case .normal, .quote, .codeBlock:
             return false
         }
 
@@ -613,7 +1039,7 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         }
 
         switch kind(at: line.index) {
-        case .task, .continuation:
+        case .task, .bullet, .numbered, .quote, .codeBlock, .continuation:
             let undoSnapshot = editorSnapshot()
             lineKinds[line.index] = .normal
             notifyTextChangedAndRefresh(scrollSelection: true)
@@ -879,7 +1305,7 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         let lineKind = kind(at: line.index)
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        pasteboard.setString(markdownLinePrefix(for: lineKind) + line.text, forType: .string)
+        pasteboard.setString(markdownLinePrefix(for: lineKind, at: line.index) + line.text, forType: .string)
 
         let infos = lineInfos()
         let deleteRange: NSRange
@@ -1313,14 +1739,14 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             guard let intersection = line.contentRange.intersection(selectedRange) else {
                 if selectedRange.contains(line.lineRange.location),
                    line.contentRange.length == 0 {
-                    markdownLines.append(markdownLinePrefix(for: kind(at: line.index)))
+                    markdownLines.append(markdownLinePrefix(for: kind(at: line.index), at: line.index))
                 }
                 continue
             }
 
             let selectedText = nsText.substring(with: intersection)
             let includesLineStart = selectedRange.location <= line.contentRange.location
-            let prefix = includesLineStart ? markdownLinePrefix(for: kind(at: line.index)) : ""
+            let prefix = includesLineStart ? markdownLinePrefix(for: kind(at: line.index), at: line.index) : ""
             markdownLines.append(prefix + selectedText)
         }
 
@@ -1331,15 +1757,57 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         return markdownLines.joined(separator: "\n")
     }
 
-    private func markdownLinePrefix(for kind: LineKind) -> String {
+    private func markdownLinePrefix(for kind: LineKind, at lineIndex: Int) -> String {
         switch kind {
         case .normal:
             return ""
         case .task(let indentColumns, let isCompleted):
             return String(repeating: " ", count: indentColumns) + (isCompleted ? "- [x] " : "- [ ] ")
+        case .bullet(let indentColumns):
+            return String(repeating: " ", count: indentColumns) + "- "
+        case .numbered(let indentColumns, let number):
+            return String(repeating: " ", count: indentColumns) + "\(number). "
+        case .quote:
+            return "> "
+        case .codeBlock:
+            return ""
         case .continuation(let indentColumns):
-            return String(repeating: " ", count: indentColumns + 6)
+            return continuationMarkdownPrefix(forLineAt: lineIndex, indentColumns: indentColumns)
         }
+    }
+
+    private func continuationMarkdownPrefix(forLineAt lineIndex: Int, indentColumns: Int) -> String {
+        switch previousStructuredKind(before: lineIndex) {
+        case .task(let parentIndentColumns, _):
+            return String(repeating: " ", count: parentIndentColumns + 6)
+        case .bullet(let parentIndentColumns):
+            return String(repeating: " ", count: parentIndentColumns + 2)
+        case .numbered(let parentIndentColumns, let number):
+            return String(repeating: " ", count: parentIndentColumns + "\(number). ".count)
+        case .quote:
+            return "> "
+        case .codeBlock:
+            return ""
+        case .normal, .continuation:
+            return String(repeating: " ", count: indentColumns)
+        }
+    }
+
+    private func previousStructuredKind(before lineIndex: Int) -> LineKind {
+        guard lineIndex > 0 else {
+            return .normal
+        }
+
+        for index in stride(from: lineIndex - 1, through: 0, by: -1) {
+            let previousKind = kind(at: index)
+            if case .continuation = previousKind {
+                continue
+            }
+
+            return previousKind
+        }
+
+        return .normal
     }
 
     private func replaceLineKindsForPaste(in selectedRange: NSRange, with replacementKinds: [LineKind]) {
@@ -1386,6 +1854,7 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         let visibleBounds = scrollView.contentView.bounds
         let textContainerOrigin = textView.textContainerOrigin
         var checkboxItems: [TodoCheckboxOverlayItem] = []
+        var markerItems: [LineMarkerOverlayItem] = []
         var imageItems: [MarkdownImageOverlayItem] = []
         var imageCaret: MarkdownImageCaretItem?
         let selectedRange = textView.selectedRange()
@@ -1432,34 +1901,63 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
                 }
             }
 
-            guard kind(at: line.index).isTask,
-                  y > -24,
-                  y < bounds.height + 24
-            else {
+            let lineKind = kind(at: line.index)
+            guard y > -24, y < bounds.height + 24 else {
                 continue
             }
 
-            let checkboxLeftX = taskCheckboxIndent(for: kind(at: line.index).indentColumns)
-            let x = max(0, textContainerOrigin.x + checkboxLeftX - visibleBounds.origin.x - TodoLayout.checkboxDrawInset)
-            let isCompleted: Bool
-            if case .task(_, let completed) = kind(at: line.index) {
-                isCompleted = completed
-            } else {
-                isCompleted = false
-            }
-
-            checkboxItems.append(
-                TodoCheckboxOverlayItem(
-                    frame: NSRect(
-                        x: x,
-                        y: y - 2,
-                        width: TodoLayout.checkboxFrameWidth,
-                        height: TodoLayout.checkboxFrameHeight
-                    ),
-                    isChecked: isCompleted,
-                    lineIndex: line.index
+            switch lineKind {
+            case .task(let indentColumns, let isCompleted):
+                let checkboxLeftX = taskCheckboxIndent(for: indentColumns)
+                let x = max(0, textContainerOrigin.x + checkboxLeftX - visibleBounds.origin.x - TodoLayout.checkboxDrawInset)
+                checkboxItems.append(
+                    TodoCheckboxOverlayItem(
+                        frame: NSRect(
+                            x: x,
+                            y: y - 2,
+                            width: TodoLayout.checkboxFrameWidth,
+                            height: TodoLayout.checkboxFrameHeight
+                        ),
+                        isChecked: isCompleted,
+                        lineIndex: line.index
+                    )
                 )
-            )
+
+            case .bullet(let indentColumns):
+                markerItems.append(
+                    LineMarkerOverlayItem(
+                        kind: .bullet,
+                        frame: markerFrame(for: indentColumns, textContainerOrigin: textContainerOrigin, visibleBounds: visibleBounds, y: y)
+                    )
+                )
+
+            case .numbered(let indentColumns, let number):
+                markerItems.append(
+                    LineMarkerOverlayItem(
+                        kind: .number(number),
+                        frame: markerFrame(for: indentColumns, textContainerOrigin: textContainerOrigin, visibleBounds: visibleBounds, y: y)
+                    )
+                )
+
+            case .quote:
+                markerItems.append(
+                    LineMarkerOverlayItem(
+                        kind: .quote,
+                        frame: NSRect(x: max(0, textContainerOrigin.x - visibleBounds.origin.x), y: y - 1, width: 14, height: lineHeight())
+                    )
+                )
+
+            case .codeBlock:
+                markerItems.append(
+                    LineMarkerOverlayItem(
+                        kind: .code,
+                        frame: NSRect(x: max(0, textContainerOrigin.x - visibleBounds.origin.x), y: y - 1, width: 14, height: lineHeight())
+                    )
+                )
+
+            case .normal, .continuation:
+                break
+            }
         }
 
         imageOverlayView.setItems(imageItems, caret: imageCaret)
@@ -1467,14 +1965,14 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         textView.imageResizeCursorRects = imageOverlayView.resizeHandleRects().map {
             textView.convert($0, from: imageOverlayView)
         }
-        overlayView.setItems(checkboxItems)
+        overlayView.setItems(checkboxItems, markers: markerItems)
         textView.checkboxCursorRects = overlayView.clickTargetRects().map {
             textView.convert($0, from: overlayView)
         }
     }
 
     private func imageCaretItem(edge: ImageCaretEdge, imageFrame: NSRect) -> MarkdownImageCaretItem {
-        let caretHeight = min(42, max(lineHeight() * 1.8, 28))
+        let caretHeight = lineHeight()
         let x: CGFloat
         switch edge {
         case .leading:
@@ -1486,10 +1984,26 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         return MarkdownImageCaretItem(
             frame: NSRect(
                 x: x,
-                y: imageFrame.minY + max(0, (imageFrame.height - caretHeight) / 2),
+                y: imageFrame.maxY - caretHeight,
                 width: 2,
                 height: caretHeight
             )
+        )
+    }
+
+    private func markerFrame(
+        for indentColumns: Int,
+        textContainerOrigin: NSPoint,
+        visibleBounds: NSRect,
+        y: CGFloat
+    ) -> NSRect {
+        let leftX = taskCheckboxIndent(for: indentColumns)
+        let x = max(0, textContainerOrigin.x + leftX - visibleBounds.origin.x - TodoLayout.checkboxDrawInset)
+        return NSRect(
+            x: x,
+            y: y - 1,
+            width: TodoLayout.checkboxFrameWidth,
+            height: lineHeight()
         )
     }
 
@@ -1601,6 +2115,28 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
                     range: line.contentRange
                 )
             }
+
+            if case .quote = lineKind,
+               line.contentRange.length > 0 {
+                textStorage.addAttributes(
+                    [
+                        .foregroundColor: palette.textNS.withAlphaComponent(0.78),
+                        .font: italicFont()
+                    ],
+                    range: line.contentRange
+                )
+            }
+
+            if case .codeBlock = lineKind,
+               line.contentRange.length > 0 {
+                textStorage.addAttributes(
+                    [
+                        .font: NSFont.monospacedSystemFont(ofSize: baseFont.pointSize - 1, weight: .regular),
+                        .backgroundColor: codeBackground
+                    ],
+                    range: line.contentRange
+                )
+            }
         }
 
         textStorage.endEditing()
@@ -1661,8 +2197,8 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         switch kind {
         case .normal:
             textIndent = 0
-        case .task(let indentColumns, _), .continuation(let indentColumns):
-            textIndent = taskTextIndent(for: indentColumns)
+        case .task, .bullet, .numbered, .quote, .codeBlock, .continuation:
+            textIndent = lineTextIndent(for: kind)
         }
 
         style.firstLineHeadIndent = textIndent
@@ -1678,8 +2214,8 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         switch kind {
         case .normal:
             textIndent = 0
-        case .task(let indentColumns, _), .continuation(let indentColumns):
-            textIndent = taskTextIndent(for: indentColumns)
+        case .task, .bullet, .numbered, .quote, .codeBlock, .continuation:
+            textIndent = lineTextIndent(for: kind)
         }
 
         style.firstLineHeadIndent = textIndent
@@ -1787,6 +2323,23 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
 
     private func taskTextIndent(for indentColumns: Int) -> CGFloat {
         taskCheckboxIndent(for: indentColumns) + TodoLayout.taskTextOffset
+    }
+
+    private func lineTextIndent(for kind: LineKind) -> CGFloat {
+        switch kind {
+        case .normal:
+            return 0
+        case .task(let indentColumns, _):
+            return taskTextIndent(for: indentColumns)
+        case .bullet(let indentColumns),
+             .numbered(let indentColumns, _),
+             .continuation(let indentColumns):
+            return taskTextIndent(for: indentColumns)
+        case .quote:
+            return 18
+        case .codeBlock:
+            return 10
+        }
     }
 
     private func imageReference(in lineText: String) -> MarkdownImageReference? {
@@ -2104,17 +2657,58 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     private func markdownText() -> String {
         let lines = displayLines()
         var markdownLines: [String] = []
+        var isWritingCodeBlock = false
 
         for (index, line) in lines.enumerated() {
             switch kind(at: index) {
             case .normal:
+                if isWritingCodeBlock {
+                    markdownLines.append("```")
+                    isWritingCodeBlock = false
+                }
                 markdownLines.append(line)
             case .task(let indentColumns, let isCompleted):
+                if isWritingCodeBlock {
+                    markdownLines.append("```")
+                    isWritingCodeBlock = false
+                }
                 let marker = isCompleted ? "- [x] " : "- [ ] "
                 markdownLines.append(String(repeating: " ", count: indentColumns) + marker + line)
+            case .bullet(let indentColumns):
+                if isWritingCodeBlock {
+                    markdownLines.append("```")
+                    isWritingCodeBlock = false
+                }
+                markdownLines.append(String(repeating: " ", count: indentColumns) + "- " + line)
+            case .numbered(let indentColumns, let number):
+                if isWritingCodeBlock {
+                    markdownLines.append("```")
+                    isWritingCodeBlock = false
+                }
+                markdownLines.append(String(repeating: " ", count: indentColumns) + "\(number). " + line)
+            case .quote:
+                if isWritingCodeBlock {
+                    markdownLines.append("```")
+                    isWritingCodeBlock = false
+                }
+                markdownLines.append("> " + line)
+            case .codeBlock:
+                if !isWritingCodeBlock {
+                    markdownLines.append("```")
+                    isWritingCodeBlock = true
+                }
+                markdownLines.append(line)
             case .continuation(let indentColumns):
-                markdownLines.append(String(repeating: " ", count: indentColumns + 6) + line)
+                if isWritingCodeBlock {
+                    markdownLines.append("```")
+                    isWritingCodeBlock = false
+                }
+                markdownLines.append(continuationMarkdownPrefix(forLineAt: index, indentColumns: indentColumns) + line)
             }
+        }
+
+        if isWritingCodeBlock {
+            markdownLines.append("```")
         }
 
         return markdownLines.joined(separator: "\n")
@@ -2125,12 +2719,46 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         var displayLines: [String] = []
         var lineKinds: [LineKind] = []
         var activeTaskIndentColumns: Int?
+        var isInsideCodeBlock = false
 
         for line in lines {
+            if line.trimmingCharacters(in: .whitespaces) == "```" {
+                isInsideCodeBlock.toggle()
+                continue
+            }
+
+            if isInsideCodeBlock {
+                displayLines.append(line)
+                lineKinds.append(.codeBlock)
+                activeTaskIndentColumns = nil
+                continue
+            }
+
             if let task = parseTaskLine(line) {
                 displayLines.append(task.text)
                 lineKinds.append(.task(indentColumns: task.indentColumns, isCompleted: task.isCompleted))
                 activeTaskIndentColumns = task.indentColumns
+                continue
+            }
+
+            if let bullet = parseBulletLine(line) {
+                displayLines.append(bullet.text)
+                lineKinds.append(.bullet(indentColumns: bullet.indentColumns))
+                activeTaskIndentColumns = nil
+                continue
+            }
+
+            if let numbered = parseNumberedLine(line) {
+                displayLines.append(numbered.text)
+                lineKinds.append(.numbered(indentColumns: numbered.indentColumns, number: numbered.number))
+                activeTaskIndentColumns = nil
+                continue
+            }
+
+            if let quote = parseQuoteLine(line) {
+                displayLines.append(quote)
+                lineKinds.append(.quote)
+                activeTaskIndentColumns = nil
                 continue
             }
 
@@ -2183,6 +2811,43 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         )
     }
 
+    private static func parseBulletLine(_ line: String) -> (indentColumns: Int, text: String)? {
+        let nsLine = line as NSString
+        let range = NSRange(location: 0, length: nsLine.length)
+        guard let match = bulletLineRegex.firstMatch(in: line, range: range) else {
+            return nil
+        }
+
+        return (
+            indentColumns: indentColumns(in: nsLine.substring(with: match.range(at: 1))),
+            text: nsLine.substring(with: match.range(at: 2))
+        )
+    }
+
+    private static func parseNumberedLine(_ line: String) -> (indentColumns: Int, number: Int, text: String)? {
+        let nsLine = line as NSString
+        let range = NSRange(location: 0, length: nsLine.length)
+        guard let match = numberedLineRegex.firstMatch(in: line, range: range) else {
+            return nil
+        }
+
+        return (
+            indentColumns: indentColumns(in: nsLine.substring(with: match.range(at: 1))),
+            number: Int(nsLine.substring(with: match.range(at: 2))) ?? 1,
+            text: nsLine.substring(with: match.range(at: 3))
+        )
+    }
+
+    private static func parseQuoteLine(_ line: String) -> String? {
+        let nsLine = line as NSString
+        let range = NSRange(location: 0, length: nsLine.length)
+        guard let match = quoteLineRegex.firstMatch(in: line, range: range) else {
+            return nil
+        }
+
+        return nsLine.substring(with: match.range(at: 1))
+    }
+
     private static func hasTypedTaskSeparator(in line: String) -> Bool {
         let nsLine = line as NSString
         let range = NSRange(location: 0, length: nsLine.length)
@@ -2203,6 +2868,18 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         pattern: #"^([ \t]*)[-*+][ \t]+(\[[ xX]\])[ \t]*(.*)$"#
     )
 
+    private static let bulletLineRegex = try! NSRegularExpression(
+        pattern: #"^([ \t]*)[-*+][ \t]+(?!\[[ xX]\][ \t]*)(.*)$"#
+    )
+
+    private static let numberedLineRegex = try! NSRegularExpression(
+        pattern: #"^([ \t]*)(\d+)\.[ \t]+(.*)$"#
+    )
+
+    private static let quoteLineRegex = try! NSRegularExpression(
+        pattern: #"^>[ \t]?(.*)$"#
+    )
+
     private static let typedTaskSeparatorRegex = try! NSRegularExpression(
         pattern: #"^[ \t]*[-*+][ \t]+\[[ xX]\][ \t]+.*$"#
     )
@@ -2210,6 +2887,95 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     private static let markdownImageLineRegex = try! NSRegularExpression(
         pattern: #"^!\[([^\]]*)\]\(([^)\s]+)\)(?:\{width=(\d+(?:\.\d+)?)\})?$"#
     )
+}
+
+private final class SlashCommandPaletteView: NSView {
+    private let stackView = NSStackView()
+    var onSelect: ((String) -> Void)?
+    var palette: AppTheme.Palette = AppTheme.yellow {
+        didSet {
+            needsDisplay = true
+            updateButtonColors()
+        }
+    }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        configureViews()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        configureViews()
+    }
+
+    func configure(commands: [(title: String, rawValue: String)]) {
+        stackView.arrangedSubviews.forEach { view in
+            stackView.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+
+        for command in commands {
+            let button = NSButton(title: command.title, target: self, action: #selector(selectCommand(_:)))
+            button.identifier = NSUserInterfaceItemIdentifier(command.rawValue)
+            button.isBordered = false
+            button.alignment = .left
+            button.font = NSFont.systemFont(ofSize: 13, weight: .medium)
+            button.setButtonType(.momentaryChange)
+            button.contentTintColor = palette.textNS
+            stackView.addArrangedSubview(button)
+            button.heightAnchor.constraint(equalToConstant: 22).isActive = true
+        }
+    }
+
+    override var fittingSize: NSSize {
+        NSSize(width: 184, height: CGFloat(max(1, stackView.arrangedSubviews.count)) * 24 + 12)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 7, yRadius: 7)
+        palette.codeBackgroundNS.setFill()
+        path.fill()
+        palette.checkboxBorderNS.withAlphaComponent(0.7).setStroke()
+        path.lineWidth = 1
+        path.stroke()
+    }
+
+    private func configureViews() {
+        wantsLayer = true
+        shadow = NSShadow()
+        shadow?.shadowBlurRadius = 10
+        shadow?.shadowOffset = NSSize(width: 0, height: -2)
+        shadow?.shadowColor = NSColor.black.withAlphaComponent(0.16)
+
+        stackView.orientation = .vertical
+        stackView.alignment = .leading
+        stackView.spacing = 2
+        stackView.edgeInsets = NSEdgeInsets(top: 6, left: 8, bottom: 6, right: 8)
+        stackView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stackView)
+
+        NSLayoutConstraint.activate([
+            stackView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            stackView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            stackView.topAnchor.constraint(equalTo: topAnchor),
+            stackView.bottomAnchor.constraint(equalTo: bottomAnchor)
+        ])
+    }
+
+    private func updateButtonColors() {
+        for case let button as NSButton in stackView.arrangedSubviews {
+            button.contentTintColor = palette.textNS
+        }
+    }
+
+    @objc private func selectCommand(_ sender: NSButton) {
+        guard let rawValue = sender.identifier?.rawValue else {
+            return
+        }
+
+        onSelect?(rawValue)
+    }
 }
 
 private final class TodoTextView: NSTextView {
@@ -2361,6 +3127,18 @@ private struct TodoCheckboxOverlayItem {
     var lineIndex: Int
 }
 
+private struct LineMarkerOverlayItem {
+    enum Kind {
+        case bullet
+        case number(Int)
+        case quote
+        case code
+    }
+
+    var kind: Kind
+    var frame: NSRect
+}
+
 private struct MarkdownImageOverlayItem {
     var image: NSImage
     var altText: String
@@ -2495,13 +3273,15 @@ private final class TodoCheckboxOverlayView: NSView {
     }
 
     private var items: [TodoCheckboxOverlayItem] = []
+    private var markers: [LineMarkerOverlayItem] = []
 
     override var isFlipped: Bool {
         true
     }
 
-    func setItems(_ items: [TodoCheckboxOverlayItem]) {
+    func setItems(_ items: [TodoCheckboxOverlayItem], markers: [LineMarkerOverlayItem] = []) {
         self.items = items
+        self.markers = markers
         needsDisplay = true
         window?.invalidateCursorRects(for: self)
     }
@@ -2518,6 +3298,10 @@ private final class TodoCheckboxOverlayView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
+
+        for marker in markers {
+            drawMarker(marker)
+        }
 
         for item in items {
             drawCheckbox(item)
@@ -2566,5 +3350,48 @@ private final class TodoCheckboxOverlayView: NSView {
         checkPath.lineCapStyle = .round
         checkPath.lineJoinStyle = .round
         checkPath.stroke()
+    }
+
+    private func drawMarker(_ item: LineMarkerOverlayItem) {
+        switch item.kind {
+        case .bullet:
+            let dotRect = NSRect(
+                x: floor(item.frame.midX - 2.3),
+                y: floor(item.frame.midY - 2.3),
+                width: 4.6,
+                height: 4.6
+            )
+            palette.textNS.withAlphaComponent(0.72).setFill()
+            NSBezierPath(ovalIn: dotRect).fill()
+
+        case .number(let number):
+            let text = "\(number)."
+            drawMarkerText(text, in: item.frame)
+
+        case .quote:
+            let bar = NSRect(x: item.frame.minX + 5, y: item.frame.minY + 1, width: 3, height: item.frame.height - 2)
+            palette.accentNS.withAlphaComponent(0.45).setFill()
+            NSBezierPath(roundedRect: bar, xRadius: 1.5, yRadius: 1.5).fill()
+
+        case .code:
+            let bar = NSRect(x: item.frame.minX + 4, y: item.frame.minY + 2, width: 4, height: item.frame.height - 4)
+            palette.codeBackgroundNS.withAlphaComponent(0.95).setFill()
+            NSBezierPath(roundedRect: bar, xRadius: 2, yRadius: 2).fill()
+        }
+    }
+
+    private func drawMarkerText(_ text: String, in rect: NSRect) {
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 12, weight: .semibold),
+            .foregroundColor: palette.textNS.withAlphaComponent(0.7)
+        ]
+        let attributed = NSAttributedString(string: text, attributes: attributes)
+        let size = attributed.size()
+        attributed.draw(
+            at: NSPoint(
+                x: rect.maxX - size.width - 2,
+                y: rect.midY - size.height / 2
+            )
+        )
     }
 }
