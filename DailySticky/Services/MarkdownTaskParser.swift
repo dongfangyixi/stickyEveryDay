@@ -462,6 +462,6 @@ enum MarkdownTaskParser {
     private static let indentUnit = "    "
 
     private static let taskRegex = try! NSRegularExpression(
-        pattern: #"^([ \t]*)((?:[-*+])[ \t]+(\[[ xX]\])[ \t]*)(.*)$"#
+        pattern: #"^([ \t]*)((?:[-*+])[ \t]*(\[(?:[ xX]?)\])[ \t]*)(.*)$"#
     )
 }

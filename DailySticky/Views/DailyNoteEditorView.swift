@@ -356,6 +356,7 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     private var dateKey: String
     private var imageCache: [String: NSImage] = [:]
     private var resizingImagePreview: (lineIndex: Int, width: CGFloat)?
+    private var lastAppliedImageLayoutWidth: CGFloat?
     private var lineKinds: [LineKind] = [.normal]
     private var isApplyingProgrammaticChange = false
     private var isRestoringUndoSnapshot = false
@@ -414,6 +415,7 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             return
         }
 
+        lastAppliedImageLayoutWidth = nil
         clearEditorUndoHistory()
         pendingUndoSnapshot = nil
         let document = Self.displayDocument(from: text)
@@ -594,9 +596,33 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
 
     override func layout() {
         super.layout()
+        synchronizeImageLineHeightsIfNeeded()
         refreshOverlay()
         if slashCommandContext != nil {
             positionSlashCommandPalette()
+        }
+    }
+
+    private func synchronizeImageLineHeightsIfNeeded() {
+        guard !isComposingMarkedText,
+              lineInfos().contains(where: { imageReference(in: $0.text) != nil })
+        else {
+            return
+        }
+
+        let usableWidth = max(0, textView.bounds.width - textView.textContainerInset.width * 2)
+        guard usableWidth > 0,
+              lastAppliedImageLayoutWidth.map({ abs($0 - usableWidth) > 0.5 }) ?? true
+        else {
+            return
+        }
+
+        lastAppliedImageLayoutWidth = usableWidth
+        applyDisplayAttributes()
+
+        if let layoutManager = textView.layoutManager,
+           let textContainer = textView.textContainer {
+            layoutManager.ensureLayout(for: textContainer)
         }
     }
 
@@ -888,6 +914,9 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             selectedRange: NSRange(location: selectedRange.location + 1, length: 0)
         ) {
             lineKinds.insert(newLineKind, at: min(lineIndex + 1, lineKinds.count))
+            if case .numbered = newLineKind {
+                renumberNumberedLists()
+            }
         }
     }
 
@@ -1190,7 +1219,12 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         case .bullet(let indentColumns):
             lineKinds[line.index] = .bullet(indentColumns: max(0, indentColumns + delta))
         case .numbered(let indentColumns, let number):
-            lineKinds[line.index] = .numbered(indentColumns: max(0, indentColumns + delta), number: number)
+            let newIndentColumns = max(0, indentColumns + delta)
+            lineKinds[line.index] = .numbered(
+                indentColumns: newIndentColumns,
+                number: newIndentColumns == indentColumns ? number : 1
+            )
+            renumberNumberedLists()
         case .continuation(let indentColumns):
             lineKinds[line.index] = .continuation(indentColumns: max(0, indentColumns + delta))
         case .normal, .quote, .codeBlock, .horizontalRule, .tableRow:
@@ -1200,6 +1234,42 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         notifyTextChangedAndRefresh(scrollSelection: true)
         registerUndoSnapshotIfChanged(from: undoSnapshot)
         return true
+    }
+
+    private func renumberNumberedLists() {
+        var countersByLevel: [Int: Int] = [:]
+        var isInsideNumberedBlock = false
+
+        for index in lineKinds.indices {
+            switch lineKinds[index] {
+            case .numbered(let indentColumns, let storedNumber):
+                let level = max(0, indentColumns / Int(TodoLayout.markdownIndentColumnsPerLevel))
+                if !isInsideNumberedBlock {
+                    countersByLevel.removeAll()
+                }
+
+                let number: Int
+                if let previousNumber = countersByLevel[level] {
+                    number = previousNumber + 1
+                } else if level == 0 {
+                    number = max(1, storedNumber)
+                } else {
+                    number = 1
+                }
+
+                countersByLevel[level] = number
+                countersByLevel = countersByLevel.filter { $0.key <= level }
+                lineKinds[index] = .numbered(indentColumns: indentColumns, number: number)
+                isInsideNumberedBlock = true
+
+            case .continuation:
+                break
+
+            default:
+                countersByLevel.removeAll()
+                isInsideNumberedBlock = false
+            }
+        }
     }
 
     private func handleDeleteBackward() -> Bool {
@@ -1635,36 +1705,110 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     private func promoteTypedMarkdownTaskIfNeeded() -> Bool {
         let selectedRange = textView.selectedRange()
         guard selectedRange.length == 0,
-              let line = lineInfo(at: selectedRange.location),
-              kind(at: line.index) == .normal,
-              Self.hasTypedTaskSeparator(in: line.text),
-              let task = Self.parseTaskLine(line.text)
+              let line = lineInfo(at: selectedRange.location)
         else {
             return false
         }
 
+        let task: (indentColumns: Int, isCompleted: Bool, text: String)
+        switch kind(at: line.index) {
+        case .normal:
+            guard Self.hasTypedTaskSeparator(in: line.text),
+                  let parsedTask = Self.parseTaskLine(line.text)
+            else {
+                return false
+            }
+            task = parsedTask
+
+        case .bullet(let indentColumns):
+            guard let taskContent = Self.parseTypedTaskContent(line.text) else {
+                return false
+            }
+            task = (
+                indentColumns: indentColumns,
+                isCompleted: taskContent.isCompleted,
+                text: taskContent.text
+            )
+
+        default:
+            return false
+        }
+
+        return promoteTypedLine(
+            line,
+            selectedRange: selectedRange,
+            replacement: task.text,
+            kind: .task(
+                indentColumns: task.indentColumns,
+                isCompleted: task.isCompleted
+            )
+        )
+    }
+
+    private func promoteTypedMarkdownStructureIfNeeded() -> Bool {
+        let selectedRange = textView.selectedRange()
+        guard selectedRange.length == 0,
+              let line = lineInfo(at: selectedRange.location),
+              kind(at: line.index) == .normal
+        else {
+            return false
+        }
+
+        if Self.isHorizontalRuleLine(line.text) {
+            return promoteTypedLine(
+                line,
+                selectedRange: selectedRange,
+                replacement: "",
+                kind: .horizontalRule
+            )
+        }
+
+        if let bullet = Self.parseBulletLine(line.text) {
+            return promoteTypedLine(
+                line,
+                selectedRange: selectedRange,
+                replacement: bullet.text,
+                kind: .bullet(indentColumns: bullet.indentColumns)
+            )
+        }
+
+        if let numbered = Self.parseNumberedLine(line.text) {
+            return promoteTypedLine(
+                line,
+                selectedRange: selectedRange,
+                replacement: numbered.text,
+                kind: .numbered(indentColumns: numbered.indentColumns, number: numbered.number)
+            )
+        }
+
+        return false
+    }
+
+    private func promoteTypedLine(
+        _ line: DisplayLineInfo,
+        selectedRange: NSRange,
+        replacement: String,
+        kind: LineKind
+    ) -> Bool {
         let oldLineLength = (line.text as NSString).length
-        let newLineLength = (task.text as NSString).length
+        let newLineLength = (replacement as NSString).length
         let removedPrefixLength = oldLineLength - newLineLength
         let selectionOffset = selectedRange.location - line.contentRange.location
         let newSelectionOffset = max(0, min(newLineLength, selectionOffset - removedPrefixLength))
 
-        let shouldPreserveEmptyTaskLine = task.text.isEmpty
-        if shouldPreserveEmptyTaskLine {
+        let shouldPreserveEmptyStructuredLine = replacement.isEmpty
+        if shouldPreserveEmptyStructuredLine {
             preservesEmptyStructuredLine = true
         }
         defer {
-            if shouldPreserveEmptyTaskLine {
+            if shouldPreserveEmptyStructuredLine {
                 preservesEmptyStructuredLine = false
             }
         }
 
         isApplyingProgrammaticChange = true
-        textView.textStorage?.replaceCharacters(in: line.contentRange, with: task.text)
-        lineKinds[line.index] = .task(
-            indentColumns: task.indentColumns,
-            isCompleted: task.isCompleted
-        )
+        textView.textStorage?.replaceCharacters(in: line.contentRange, with: replacement)
+        lineKinds[line.index] = kind
         reconcileLineKinds()
         textView.setSelectedRange(
             NSRange(location: line.contentRange.location + newSelectionOffset, length: 0)
@@ -1674,30 +1818,6 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
 
         notifyTextChangedAndRefresh(scrollSelection: true)
         return true
-    }
-
-    private func promoteTypedMarkdownStructureIfNeeded() -> Bool {
-        let selectedRange = textView.selectedRange()
-        guard selectedRange.length == 0 else {
-            return false
-        }
-
-        if let line = lineInfo(at: selectedRange.location),
-           kind(at: line.index) == .normal,
-           Self.isHorizontalRuleLine(line.text) {
-            preservesEmptyStructuredLine = true
-            defer { preservesEmptyStructuredLine = false }
-
-            return applyTextStorageEdit(
-                range: line.contentRange,
-                replacement: "",
-                selectedRange: NSRange(location: line.contentRange.location, length: 0)
-            ) {
-                lineKinds[line.index] = .horizontalRule
-            }
-        }
-
-        return false
     }
 
     private func markdownTableRenderBlocks() -> [MarkdownTableRenderBlock] {
@@ -2284,7 +2404,7 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             case .bullet(let indentColumns):
                 markerItems.append(
                     LineMarkerOverlayItem(
-                        kind: .bullet,
+                        kind: .bullet(level: listLevel(for: indentColumns)),
                         frame: markerFrame(for: indentColumns, textContainerOrigin: textContainerOrigin, visibleBounds: visibleBounds, y: y)
                     )
                 )
@@ -2292,7 +2412,7 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             case .numbered(let indentColumns, let number):
                 markerItems.append(
                     LineMarkerOverlayItem(
-                        kind: .number(number),
+                        kind: .number(number, level: listLevel(for: indentColumns)),
                         frame: markerFrame(for: indentColumns, textContainerOrigin: textContainerOrigin, visibleBounds: visibleBounds, y: y)
                     )
                 )
@@ -2842,6 +2962,10 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
 
     private func taskTextIndent(for indentColumns: Int) -> CGFloat {
         taskCheckboxIndent(for: indentColumns) + TodoLayout.taskTextOffset
+    }
+
+    private func listLevel(for indentColumns: Int) -> Int {
+        max(0, indentColumns / Int(TodoLayout.markdownIndentColumnsPerLevel))
     }
 
     private func lineTextIndent(for kind: LineKind) -> CGFloat {
@@ -3536,6 +3660,20 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         return typedTaskSeparatorRegex.firstMatch(in: line, range: range) != nil
     }
 
+    private static func parseTypedTaskContent(_ line: String) -> (isCompleted: Bool, text: String)? {
+        let nsLine = line as NSString
+        let range = NSRange(location: 0, length: nsLine.length)
+        guard let match = typedTaskContentRegex.firstMatch(in: line, range: range) else {
+            return nil
+        }
+
+        let marker = nsLine.substring(with: match.range(at: 1))
+        return (
+            isCompleted: marker.localizedCaseInsensitiveContains("x"),
+            text: nsLine.substring(with: match.range(at: 2))
+        )
+    }
+
     private static func containsTaskMarkdown(in text: String) -> Bool {
         text.components(separatedBy: "\n").contains { parseTaskLine($0) != nil }
     }
@@ -3547,7 +3685,7 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     }
 
     private static let taskLineRegex = try! NSRegularExpression(
-        pattern: #"^([ \t]*)[-*+][ \t]+(\[[ xX]\])[ \t]*(.*)$"#
+        pattern: #"^([ \t]*)[-*+][ \t]*(\[(?:[ xX]?)\])[ \t]*(.*)$"#
     )
 
     private static let bulletLineRegex = try! NSRegularExpression(
@@ -3563,7 +3701,11 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     )
 
     private static let typedTaskSeparatorRegex = try! NSRegularExpression(
-        pattern: #"^[ \t]*[-*+][ \t]+\[[ xX]\][ \t]+.*$"#
+        pattern: #"^[ \t]*[-*+][ \t]*\[(?:[ xX]?)\][ \t]*.*$"#
+    )
+
+    private static let typedTaskContentRegex = try! NSRegularExpression(
+        pattern: #"^(\[(?:[ xX]?)\])[ \t]*(.*)$"#
     )
 
     private static let markdownImageLineRegex = try! NSRegularExpression(
@@ -4153,8 +4295,8 @@ private struct TodoCheckboxOverlayItem {
 
 private struct LineMarkerOverlayItem {
     enum Kind {
-        case bullet
-        case number(Int)
+        case bullet(level: Int)
+        case number(Int, level: Int)
         case quote
         case codeBlock(language: String?)
         case horizontalRule
@@ -4380,19 +4522,11 @@ private final class TodoCheckboxOverlayView: NSView {
 
     private func drawMarker(_ item: LineMarkerOverlayItem) {
         switch item.kind {
-        case .bullet:
-            let dotRect = NSRect(
-                x: floor(item.frame.midX - 2.3),
-                y: floor(item.frame.midY - 2.3),
-                width: 4.6,
-                height: 4.6
-            )
-            palette.textNS.withAlphaComponent(0.72).setFill()
-            NSBezierPath(ovalIn: dotRect).fill()
+        case .bullet(let level):
+            drawBullet(level: level, in: item.frame)
 
-        case .number(let number):
-            let text = "\(number)."
-            drawMarkerText(text, in: item.frame)
+        case .number(let number, let level):
+            drawMarkerText(numberedMarker(number: number, level: level), in: item.frame)
 
         case .quote:
             let bar = NSRect(x: item.frame.minX + 5, y: item.frame.minY + 1, width: 3, height: item.frame.height - 2)
@@ -4517,9 +4651,91 @@ private final class TodoCheckboxOverlayView: NSView {
         let size = attributed.size()
         attributed.draw(
             at: NSPoint(
-                x: rect.maxX - size.width - 2,
+                x: rect.midX - size.width / 2,
                 y: rect.midY - size.height / 2
             )
         )
+    }
+
+    private func drawBullet(level: Int, in rect: NSRect) {
+        let color = palette.textNS.withAlphaComponent(0.72)
+
+        switch level % 3 {
+        case 1:
+            let circleRect = NSRect(
+                x: floor(rect.midX - 3),
+                y: floor(rect.midY - 3),
+                width: 6,
+                height: 6
+            )
+            color.setStroke()
+            let path = NSBezierPath(ovalIn: circleRect)
+            path.lineWidth = 1.25
+            path.stroke()
+
+        case 2:
+            let squareRect = NSRect(
+                x: floor(rect.midX - 2.5),
+                y: floor(rect.midY - 2.5),
+                width: 5,
+                height: 5
+            )
+            color.setFill()
+            NSBezierPath(roundedRect: squareRect, xRadius: 0.6, yRadius: 0.6).fill()
+
+        default:
+            let dotRect = NSRect(
+                x: floor(rect.midX - 2.3),
+                y: floor(rect.midY - 2.3),
+                width: 4.6,
+                height: 4.6
+            )
+            color.setFill()
+            NSBezierPath(ovalIn: dotRect).fill()
+        }
+    }
+
+    private func numberedMarker(number: Int, level: Int) -> String {
+        let safeNumber = max(1, number)
+        switch level % 3 {
+        case 1:
+            return "\(alphabeticNumber(safeNumber))."
+        case 2:
+            return "\(romanNumber(safeNumber))."
+        default:
+            return "\(safeNumber)."
+        }
+    }
+
+    private func alphabeticNumber(_ number: Int) -> String {
+        var value = number
+        var scalars: [UnicodeScalar] = []
+
+        while value > 0 {
+            value -= 1
+            scalars.append(UnicodeScalar(97 + value % 26)!)
+            value /= 26
+        }
+
+        return String(String.UnicodeScalarView(scalars.reversed()))
+    }
+
+    private func romanNumber(_ number: Int) -> String {
+        let numerals: [(value: Int, symbol: String)] = [
+            (1000, "m"), (900, "cm"), (500, "d"), (400, "cd"),
+            (100, "c"), (90, "xc"), (50, "l"), (40, "xl"),
+            (10, "x"), (9, "ix"), (5, "v"), (4, "iv"), (1, "i")
+        ]
+        var remainder = number
+        var result = ""
+
+        for numeral in numerals {
+            while remainder >= numeral.value {
+                result += numeral.symbol
+                remainder -= numeral.value
+            }
+        }
+
+        return result
     }
 }
