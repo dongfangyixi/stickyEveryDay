@@ -13,6 +13,7 @@ final class AppState: ObservableObject {
     @Published private(set) var isPinned: Bool
     @Published private(set) var theme: AppThemeKind
     @Published private(set) var noteOpacity: Double
+    @Published private(set) var hasSeenWelcome: Bool
     @Published var lastErrorMessage: String?
 
     private let dataStore: AppDataStore
@@ -81,6 +82,7 @@ final class AppState: ObservableObject {
         self.isPinned = loadedData.settings.isPinned
         self.theme = loadedData.settings.theme
         self.noteOpacity = loadedData.settings.noteOpacity
+        self.hasSeenWelcome = loadedData.settings.hasSeenWelcome
         self.lastErrorMessage = loadWarning
         self.dataStore = dataStore
         self.dateKeyService = dateKeyService
@@ -155,6 +157,16 @@ final class AppState: ObservableObject {
         }
     }
 
+    func markWelcomeSeen() {
+        guard !data.settings.hasSeenWelcome else {
+            return
+        }
+
+        mutateData(saveMode: .immediate) { data in
+            data.settings.hasSeenWelcome = true
+        }
+    }
+
     func updateWindowFrame(_ frame: StoredWindowFrame) {
         data.settings.windowFrame = frame
         saveDebounced()
@@ -171,6 +183,7 @@ final class AppState: ObservableObject {
         isPinned = data.settings.isPinned
         theme = data.settings.theme
         noteOpacity = data.settings.noteOpacity
+        hasSeenWelcome = data.settings.hasSeenWelcome
 
         switch saveMode {
         case .debounced:

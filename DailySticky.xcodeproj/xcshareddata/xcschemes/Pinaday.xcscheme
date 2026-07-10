@@ -15,8 +15,8 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "A50000000000000000000001"
-               BuildableName = "DailySticky.app"
-               BlueprintName = "DailySticky"
+               BuildableName = "Pinaday.app"
+               BlueprintName = "Pinaday"
                ReferencedContainer = "container:DailySticky.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
@@ -43,8 +43,8 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "A50000000000000000000001"
-            BuildableName = "DailySticky.app"
-            BlueprintName = "DailySticky"
+            BuildableName = "Pinaday.app"
+            BlueprintName = "Pinaday"
             ReferencedContainer = "container:DailySticky.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
@@ -60,8 +60,8 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "A50000000000000000000001"
-            BuildableName = "DailySticky.app"
-            BlueprintName = "DailySticky"
+            BuildableName = "Pinaday.app"
+            BlueprintName = "Pinaday"
             ReferencedContainer = "container:DailySticky.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>

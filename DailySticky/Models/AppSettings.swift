@@ -27,19 +27,22 @@ struct AppSettings: Codable, Equatable {
     var windowFrame: StoredWindowFrame?
     var theme: AppThemeKind
     var noteOpacity: Double
+    var hasSeenWelcome: Bool
 
     init(
         lastOpenedDateKey: String,
         isPinned: Bool,
         windowFrame: StoredWindowFrame?,
         theme: AppThemeKind = .yellow,
-        noteOpacity: Double = 1.0
+        noteOpacity: Double = 1.0,
+        hasSeenWelcome: Bool = false
     ) {
         self.lastOpenedDateKey = lastOpenedDateKey
         self.isPinned = isPinned
         self.windowFrame = windowFrame
         self.theme = theme
         self.noteOpacity = Self.clampedOpacity(noteOpacity)
+        self.hasSeenWelcome = hasSeenWelcome
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -48,6 +51,7 @@ struct AppSettings: Codable, Equatable {
         case windowFrame
         case theme
         case noteOpacity
+        case hasSeenWelcome
     }
 
     init(from decoder: Decoder) throws {
@@ -59,6 +63,7 @@ struct AppSettings: Codable, Equatable {
         noteOpacity = Self.clampedOpacity(
             try container.decodeIfPresent(Double.self, forKey: .noteOpacity) ?? 1.0
         )
+        hasSeenWelcome = try container.decodeIfPresent(Bool.self, forKey: .hasSeenWelcome) ?? false
     }
 
     static func clampedOpacity(_ opacity: Double) -> Double {

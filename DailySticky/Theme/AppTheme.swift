@@ -156,3 +156,68 @@ struct StickyTextButtonStyle: ButtonStyle {
             )
     }
 }
+
+struct SettingsSwitchToggleStyle: ToggleStyle {
+    let palette: AppTheme.Palette
+
+    func makeBody(configuration: Configuration) -> some View {
+        Button {
+            configuration.isOn.toggle()
+        } label: {
+            HStack(spacing: 12) {
+                configuration.label
+                    .foregroundStyle(palette.text)
+
+                Spacer(minLength: 12)
+
+                ZStack {
+                    Capsule(style: .continuous)
+                        .fill(configuration.isOn ? palette.accent : offTrackColor)
+                        .overlay {
+                            Capsule(style: .continuous)
+                                .strokeBorder(
+                                    configuration.isOn ? palette.accent.opacity(0.7) : offTrackBorderColor,
+                                    lineWidth: 1
+                                )
+                        }
+
+                    Circle()
+                        .fill(thumbColor)
+                        .frame(width: 18, height: 18)
+                        .shadow(color: Color.black.opacity(0.16), radius: 1.5, y: 1)
+                        .offset(x: configuration.isOn ? 9 : -9)
+                }
+                .frame(width: 42, height: 24)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .animation(.easeOut(duration: 0.16), value: configuration.isOn)
+    }
+
+    private var offTrackColor: Color {
+        switch palette.kind {
+        case .yellow:
+            return palette.text.opacity(0.13)
+        case .light:
+            return palette.text.opacity(0.11)
+        case .dark:
+            return Color.white.opacity(0.13)
+        }
+    }
+
+    private var offTrackBorderColor: Color {
+        switch palette.kind {
+        case .yellow:
+            return palette.text.opacity(0.22)
+        case .light:
+            return palette.text.opacity(0.18)
+        case .dark:
+            return Color.white.opacity(0.12)
+        }
+    }
+
+    private var thumbColor: Color {
+        palette.kind == .dark ? Color(white: 0.88) : Color.white.opacity(0.96)
+    }
+}

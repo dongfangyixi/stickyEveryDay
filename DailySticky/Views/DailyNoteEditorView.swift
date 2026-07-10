@@ -2272,7 +2272,7 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
                     TodoCheckboxOverlayItem(
                         frame: NSRect(
                             x: x,
-                            y: y - 2,
+                            y: y - 3,
                             width: TodoLayout.checkboxFrameWidth,
                             height: TodoLayout.checkboxFrameHeight
                         ),

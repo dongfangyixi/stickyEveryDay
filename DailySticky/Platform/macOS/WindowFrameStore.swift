@@ -1,6 +1,9 @@
 import AppKit
 
 enum WindowFrameStore {
+    static let minimumSize = NSSize(width: 320, height: 280)
+    private static let legacyDefaultSize = NSSize(width: 380, height: 560)
+
     static func storedFrame(from frame: NSRect) -> StoredWindowFrame {
         StoredWindowFrame(
             x: frame.origin.x,
@@ -21,7 +24,7 @@ enum WindowFrameStore {
 
     static func defaultFrame() -> NSRect {
         let visibleFrame = NSScreen.main?.visibleFrame ?? NSRect(x: 80, y: 80, width: 1200, height: 800)
-        let size = NSSize(width: 380, height: 560)
+        let size = minimumSize
 
         return NSRect(
             x: visibleFrame.maxX - size.width - 32,
@@ -32,8 +35,8 @@ enum WindowFrameStore {
     }
 
     static func usableFrame(from storedFrame: StoredWindowFrame?) -> NSRect {
-        let candidate = storedFrame.map(frame(from:)) ?? defaultFrame()
-        let minimumSize = NSSize(width: 320, height: 420)
+        let storedCandidate = storedFrame.map(frame(from:))
+        let candidate = storedCandidate.flatMap { isLegacyDefaultFrame($0) ? nil : $0 } ?? defaultFrame()
 
         var frame = candidate
         frame.size.width = max(frame.size.width, minimumSize.width)
@@ -66,5 +69,8 @@ enum WindowFrameStore {
 
         return frame
     }
-}
 
+    private static func isLegacyDefaultFrame(_ frame: NSRect) -> Bool {
+        abs(frame.width - legacyDefaultSize.width) < 1 && abs(frame.height - legacyDefaultSize.height) < 1
+    }
+}
