@@ -1,5 +1,7 @@
 import AppKit
 import SwiftUI
+import Vision
+import VisionKit
 
 private enum TodoLayout {
     static let checkboxFrameWidth: CGFloat = 26
@@ -349,6 +351,7 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     private let scrollView = NSScrollView()
     private let textView = TodoTextView()
     private let overlayView = TodoCheckboxOverlayView()
+    private let imageInteractionView = MarkdownImageInteractionOverlayView()
     private let imageOverlayView = MarkdownImageOverlayView()
     private let slashPaletteView = SlashCommandPaletteView()
     private let baseFont = NSFont.systemFont(ofSize: 14)
@@ -403,6 +406,9 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     }
 
     func setDateKey(_ dateKey: String) {
+        if self.dateKey != dateKey {
+            imageInteractionView.clearAnalysisCache()
+        }
         self.dateKey = dateKey
     }
 
@@ -679,14 +685,37 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         textView.canPasteHandler = {
             Self.canPasteImage(from: .general) || NSPasteboard.general.string(forType: .string) != nil
         }
-        textView.imageMouseDownHandler = { [weak self] event in
-            self?.handleImageMouseDown(event) ?? false
-        }
         textView.checkboxMouseDownHandler = { [weak self] event in
             self?.handleCheckboxMouseDown(event) ?? false
         }
+        textView.imageCursorProvider = { [weak self] point in
+            guard let self else {
+                return nil
+            }
+
+            let interactionPoint = self.imageInteractionView.convert(point, from: self.textView)
+            return self.imageInteractionView.cursor(at: interactionPoint)
+        }
+
+        imageInteractionView.onSelectImage = { [weak self] item, event in
+            guard let self else {
+                return
+            }
+
+            let point = self.imageOverlayView.convert(event.locationInWindow, from: nil)
+            self.selectImage(item, at: point)
+        }
+        imageInteractionView.onResizeImage = { [weak self] item, event in
+            guard let self else {
+                return
+            }
+
+            let point = self.imageOverlayView.convert(event.locationInWindow, from: nil)
+            _ = self.resizeImage(item, from: point)
+        }
 
         imageOverlayView.translatesAutoresizingMaskIntoConstraints = false
+        imageInteractionView.translatesAutoresizingMaskIntoConstraints = false
         overlayView.translatesAutoresizingMaskIntoConstraints = false
         slashPaletteView.configure(
             commands: SlashCommand.allCases.map { command in
@@ -715,6 +744,7 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
 
         scrollView.documentView = textView
         addSubview(scrollView)
+        addSubview(imageInteractionView)
         addSubview(imageOverlayView)
         addSubview(overlayView)
         addSubview(slashPaletteView)
@@ -724,6 +754,10 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
             scrollView.topAnchor.constraint(equalTo: topAnchor),
             scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
+            imageInteractionView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            imageInteractionView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            imageInteractionView.topAnchor.constraint(equalTo: topAnchor),
+            imageInteractionView.bottomAnchor.constraint(equalTo: bottomAnchor),
             imageOverlayView.leadingAnchor.constraint(equalTo: leadingAnchor),
             imageOverlayView.trailingAnchor.constraint(equalTo: trailingAnchor),
             imageOverlayView.topAnchor.constraint(equalTo: topAnchor),
@@ -1977,20 +2011,6 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         return true
     }
 
-    private func handleImageMouseDown(_ event: NSEvent) -> Bool {
-        let point = imageOverlayView.convert(event.locationInWindow, from: nil)
-        if let item = imageOverlayView.resizeTarget(at: point) {
-            return resizeImage(item, from: point)
-        }
-
-        guard let item = imageOverlayView.imageTarget(at: point) else {
-            return false
-        }
-
-        selectImage(item, at: point)
-        return true
-    }
-
     private func selectImage(_ item: MarkdownImageOverlayItem, at point: NSPoint) {
         let infos = lineInfos()
         guard infos.indices.contains(item.lineIndex) else {
@@ -2291,6 +2311,7 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         guard let layoutManager = textView.layoutManager,
               let textContainer = textView.textContainer
         else {
+            imageInteractionView.setItems([])
             return
         }
 
@@ -2359,6 +2380,7 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
                         && selectedRange.location <= NSMaxRange(line.contentRange)
                     imageItems.append(
                         MarkdownImageOverlayItem(
+                            attachmentPath: reference.path,
                             image: image,
                             altText: reference.altText,
                             frame: imageFrame,
@@ -2481,10 +2503,14 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             }
         }
 
+        imageInteractionView.setItems(imageItems)
         imageOverlayView.setItems(imageItems, caret: imageCaret)
         updateInsertionPointColor(showCustomImageCaret: imageCaret != nil)
-        textView.imageResizeCursorRects = imageOverlayView.resizeHandleRects().map {
-            textView.convert($0, from: imageOverlayView)
+        textView.imageCursorRects = imageInteractionView.imageFrameRects().map {
+            textView.convert($0, from: imageInteractionView)
+        }
+        textView.imageResizeCursorRects = imageInteractionView.resizeHandleRects().map {
+            textView.convert($0, from: imageInteractionView)
         }
         overlayView.setItems(checkboxItems, markers: markerItems)
         textView.checkboxCursorRects = overlayView.clickTargetRects().map {
@@ -4135,8 +4161,13 @@ private final class TodoTextView: NSTextView {
     var cutHandler: (() -> Bool)?
     var pasteHandler: (() -> Bool)?
     var canPasteHandler: (() -> Bool)?
-    var imageMouseDownHandler: ((NSEvent) -> Bool)?
     var checkboxMouseDownHandler: ((NSEvent) -> Bool)?
+    var imageCursorProvider: ((NSPoint) -> NSCursor?)?
+    var imageCursorRects: [NSRect] = [] {
+        didSet {
+            window?.invalidateCursorRects(for: self)
+        }
+    }
     var imageResizeCursorRects: [NSRect] = [] {
         didSet {
             window?.invalidateCursorRects(for: self)
@@ -4223,10 +4254,6 @@ private final class TodoTextView: NSTextView {
     }
 
     override func mouseDown(with event: NSEvent) {
-        if imageMouseDownHandler?(event) == true {
-            return
-        }
-
         if checkboxMouseDownHandler?(event) == true {
             return
         }
@@ -4257,8 +4284,8 @@ private final class TodoTextView: NSTextView {
             return
         }
 
-        if imageResizeCursorRects.contains(where: { $0.contains(point) }) {
-            NSCursor.resizeLeftRight.set()
+        if let imageCursor = imageCursorProvider?(point) {
+            imageCursor.set()
             return
         }
 
@@ -4279,6 +4306,10 @@ private final class TodoTextView: NSTextView {
 
         for rect in checkboxCursorRects {
             addCursorRect(rect, cursor: .pointingHand)
+        }
+
+        for rect in imageCursorRects {
+            addCursorRect(rect, cursor: .arrow)
         }
 
         for rect in imageResizeCursorRects {
@@ -4308,11 +4339,21 @@ private struct LineMarkerOverlayItem {
 }
 
 private struct MarkdownImageOverlayItem {
+    var attachmentPath: String
     var image: NSImage
     var altText: String
     var frame: NSRect
     var lineIndex: Int
     var isSelected: Bool
+
+    var resizeHandleRect: NSRect {
+        NSRect(
+            x: frame.maxX - 8,
+            y: frame.midY - 15,
+            width: 16,
+            height: 30
+        )
+    }
 }
 
 private struct MarkdownImageCaretItem {
@@ -4339,18 +4380,6 @@ private final class MarkdownImageOverlayView: NSView {
         needsDisplay = true
     }
 
-    func resizeTarget(at point: NSPoint) -> MarkdownImageOverlayItem? {
-        items.first { $0.isSelected && resizeHandleRect(for: $0).contains(point) }
-    }
-
-    func imageTarget(at point: NSPoint) -> MarkdownImageOverlayItem? {
-        items.first { $0.frame.contains(point) }
-    }
-
-    func resizeHandleRects() -> [NSRect] {
-        items.filter(\.isSelected).map { resizeHandleRect(for: $0) }
-    }
-
     override func hitTest(_ point: NSPoint) -> NSView? {
         nil
     }
@@ -4369,18 +4398,6 @@ private final class MarkdownImageOverlayView: NSView {
 
     private func drawImage(_ item: MarkdownImageOverlayItem) {
         let borderPath = NSBezierPath(roundedRect: item.frame, xRadius: 6, yRadius: 6)
-        NSGraphicsContext.saveGraphicsState()
-        borderPath.addClip()
-        item.image.draw(
-            in: item.frame,
-            from: .zero,
-            operation: .sourceOver,
-            fraction: 1,
-            respectFlipped: true,
-            hints: [.interpolation: NSImageInterpolation.high]
-        )
-        NSGraphicsContext.restoreGraphicsState()
-
         (item.isSelected ? palette.accentNS : palette.checkboxBorderNS)
             .withAlphaComponent(item.isSelected ? 0.78 : 0.35)
             .setStroke()
@@ -4398,17 +4415,8 @@ private final class MarkdownImageOverlayView: NSView {
         path.fill()
     }
 
-    private func resizeHandleRect(for item: MarkdownImageOverlayItem) -> NSRect {
-        NSRect(
-            x: item.frame.maxX - 8,
-            y: item.frame.midY - 15,
-            width: 16,
-            height: 30
-        )
-    }
-
     private func drawResizeHandle(for item: MarkdownImageOverlayItem) {
-        let rect = resizeHandleRect(for: item)
+        let rect = item.resizeHandleRect
         let visibleRect = NSRect(
             x: rect.midX - 4,
             y: rect.minY + 4,
@@ -4431,6 +4439,609 @@ private final class MarkdownImageOverlayView: NSView {
             linePath.stroke()
         }
     }
+}
+
+@MainActor
+private final class MarkdownImageInteractionOverlayView: NSView {
+    var onSelectImage: ((MarkdownImageOverlayItem, NSEvent) -> Void)?
+    var onResizeImage: ((MarkdownImageOverlayItem, NSEvent) -> Void)?
+
+    private let analyzer = ImageAnalyzer()
+    private var analysisCache: [String: ImageAnalysis] = [:]
+    private var textRegionCache: [String: [CGRect]] = [:]
+    private var analysisTasks: [String: Task<Void, Never>] = [:]
+    private var imageViews: [String: LiveTextImageView] = [:]
+    private var items: [MarkdownImageOverlayItem] = []
+    private var analysisGeneration = 0
+
+    override var isFlipped: Bool {
+        true
+    }
+
+    func setItems(_ items: [MarkdownImageOverlayItem]) {
+        self.items = items
+
+        let visibleKeys = Set(items.map(viewKey(for:)))
+        for (key, imageView) in imageViews where !visibleKeys.contains(key) {
+            imageView.removeFromSuperview()
+            imageViews.removeValue(forKey: key)
+        }
+
+        for item in items {
+            let key = viewKey(for: item)
+            let imageView: LiveTextImageView
+            if let existing = imageViews[key] {
+                imageView = existing
+            } else {
+                imageView = LiveTextImageView()
+                imageViews[key] = imageView
+                addSubview(imageView)
+            }
+
+            imageView.frame = item.frame
+            imageView.setImage(item.image)
+
+            if let analysis = analysisCache[item.attachmentPath] {
+                imageView.setAnalysis(
+                    analysis,
+                    textRegions: textRegionCache[item.attachmentPath] ?? []
+                )
+            } else {
+                analyze(item)
+            }
+        }
+
+        window?.invalidateCursorRects(for: self)
+    }
+
+    func clearAnalysisCache() {
+        analysisGeneration += 1
+        analysisTasks.values.forEach { $0.cancel() }
+        analysisTasks.removeAll()
+        analysisCache.removeAll()
+        textRegionCache.removeAll()
+        imageViews.values.forEach { $0.setAnalysis(nil, textRegions: []) }
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let localPoint = convert(point, from: superview)
+        guard let (item, imageView) = imageTarget(at: localPoint) else {
+            return nil
+        }
+
+        if item.isSelected, item.resizeHandleRect.contains(localPoint) {
+            return self
+        }
+
+        let imagePoint = imageView.convert(localPoint, from: self)
+        switch imageView.interactionRegion(at: imagePoint) {
+        case .ocrControl(let control):
+            return control
+        case .ocrText:
+            if let event = NSApp.currentEvent {
+                imageView.prepareForTextSelection(with: event)
+            }
+            return imageView.liveTextTarget(at: imagePoint)
+        case .imageBody:
+            return self
+        }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        guard let (item, imageView) = imageTarget(at: point) else {
+            return
+        }
+
+        imageView.resetTextSelection()
+        if item.isSelected, item.resizeHandleRect.contains(point) {
+            onResizeImage?(item, event)
+        } else {
+            onSelectImage?(item, event)
+        }
+    }
+
+    func cursor(at point: NSPoint) -> NSCursor? {
+        guard let (item, imageView) = imageTarget(at: point) else {
+            return nil
+        }
+
+        if item.isSelected, item.resizeHandleRect.contains(point) {
+            return .resizeLeftRight
+        }
+
+        let imagePoint = imageView.convert(point, from: self)
+        switch imageView.interactionRegion(at: imagePoint) {
+        case .ocrControl:
+            return .arrow
+        case .ocrText:
+            return .iBeam
+        case .imageBody:
+            return .arrow
+        }
+    }
+
+    func imageFrameRects() -> [NSRect] {
+        items.map(\.frame)
+    }
+
+    func resizeHandleRects() -> [NSRect] {
+        items.filter(\.isSelected).map(\.resizeHandleRect)
+    }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+
+        for rect in imageFrameRects() {
+            addCursorRect(rect, cursor: .arrow)
+        }
+
+        for rect in resizeHandleRects() {
+            addCursorRect(rect, cursor: .resizeLeftRight)
+        }
+    }
+
+    private func imageTarget(at point: NSPoint) -> (MarkdownImageOverlayItem, LiveTextImageView)? {
+        for item in items.reversed() where item.frame.contains(point) {
+            guard let imageView = imageViews[viewKey(for: item)] else {
+                continue
+            }
+            return (item, imageView)
+        }
+        return nil
+    }
+
+    private func analyze(_ item: MarkdownImageOverlayItem) {
+        guard ImageAnalyzer.isSupported,
+              analysisTasks[item.attachmentPath] == nil
+        else {
+            return
+        }
+
+        let attachmentPath = item.attachmentPath
+        let image = item.image
+        let generation = analysisGeneration
+        var proposedRect = NSRect(origin: .zero, size: image.size)
+        let cgImage = image.cgImage(
+            forProposedRect: &proposedRect,
+            context: nil,
+            hints: nil
+        )
+        analysisTasks[attachmentPath] = Task { [weak self] in
+            guard let self else {
+                return
+            }
+
+            do {
+                let configuration = ImageAnalyzer.Configuration([.text])
+                async let analysisRequest = analyzer.analyze(
+                    image,
+                    orientation: .up,
+                    configuration: configuration
+                )
+                let textRegions = await Self.recognizedTextRegions(in: cgImage)
+                let analysis = try await analysisRequest
+                guard !Task.isCancelled else {
+                    return
+                }
+
+                guard generation == analysisGeneration else {
+                    return
+                }
+                analysisCache[attachmentPath] = analysis
+                textRegionCache[attachmentPath] = textRegions
+                for (key, imageView) in imageViews
+                    where key.hasPrefix(attachmentPath + "|") {
+                    imageView.setAnalysis(analysis, textRegions: textRegions)
+                }
+            } catch {
+                // An unreadable image remains a normal resizable image.
+            }
+
+            if generation == analysisGeneration {
+                analysisTasks.removeValue(forKey: attachmentPath)
+            }
+        }
+    }
+
+    private func viewKey(for item: MarkdownImageOverlayItem) -> String {
+        "\(item.attachmentPath)|\(item.lineIndex)"
+    }
+
+    nonisolated private static func recognizedTextRegions(
+        in image: CGImage?
+    ) async -> [CGRect] {
+        guard let image else {
+            return []
+        }
+
+        return await Task.detached(priority: .utility) {
+            let request = VNRecognizeTextRequest()
+            request.recognitionLevel = .accurate
+            request.usesLanguageCorrection = true
+            request.automaticallyDetectsLanguage = true
+
+            do {
+                let handler = VNImageRequestHandler(cgImage: image, orientation: .up)
+                try handler.perform([request])
+                return (request.results ?? []).compactMap { observation in
+                    guard observation.topCandidates(1).first != nil else {
+                        return nil
+                    }
+
+                    let bounds = observation.boundingBox
+                    return bounds.width > 0 && bounds.height > 0 ? bounds : nil
+                }
+            } catch {
+                return []
+            }
+        }.value
+    }
+}
+
+@MainActor
+private final class OCRRegionOverlayView: NSView {
+    var regions: [CGRect] = [] {
+        didSet { needsDisplay = true }
+    }
+
+    var imageRect: CGRect = .zero {
+        didSet { needsDisplay = true }
+    }
+
+    var showsRegions = false {
+        didSet {
+            isHidden = !showsRegions
+            needsDisplay = true
+        }
+    }
+
+    override var isFlipped: Bool { true }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        nil
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard showsRegions, !imageRect.isEmpty else { return }
+
+        for region in regions {
+            let rect = NSRect(
+                x: imageRect.minX + region.minX * imageRect.width,
+                y: imageRect.minY + (1 - region.maxY) * imageRect.height,
+                width: region.width * imageRect.width,
+                height: region.height * imageRect.height
+            ).insetBy(dx: -1.5, dy: -1.5)
+            let path = NSBezierPath(roundedRect: rect, xRadius: 2, yRadius: 2)
+            NSColor.systemCyan.withAlphaComponent(0.18).setFill()
+            path.fill()
+            NSColor.black.withAlphaComponent(0.72).setStroke()
+            path.lineWidth = 3
+            path.stroke()
+            NSColor.systemCyan.withAlphaComponent(0.95).setStroke()
+            path.lineWidth = 1.25
+            path.stroke()
+        }
+    }
+}
+
+@MainActor
+private final class OCRHighlightButton: NSButton {
+    private final class SymbolView: NSImageView {
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            nil
+        }
+    }
+
+    private let symbolView = SymbolView()
+
+    var symbolColor: NSColor {
+        get { symbolView.contentTintColor ?? .labelColor }
+        set { symbolView.contentTintColor = newValue }
+    }
+
+    init(symbol: NSImage) {
+        super.init(frame: .zero)
+
+        title = ""
+        alternateTitle = ""
+        attributedTitle = NSAttributedString(string: "")
+        attributedAlternateTitle = NSAttributedString(string: "")
+
+        symbolView.image = symbol
+        symbolView.imageScaling = .scaleProportionallyDown
+        symbolView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(symbolView)
+        NSLayoutConstraint.activate([
+            symbolView.centerXAnchor.constraint(equalTo: centerXAnchor),
+            symbolView.centerYAnchor.constraint(equalTo: centerYAnchor),
+            symbolView.widthAnchor.constraint(equalToConstant: 16),
+            symbolView.heightAnchor.constraint(equalToConstant: 16)
+        ])
+    }
+
+    required init?(coder: NSCoder) {
+        nil
+    }
+}
+
+@MainActor
+private final class LiveTextImageView: NSView, ImageAnalysisOverlayViewDelegate {
+    enum InteractionRegion {
+        case ocrControl(NSView)
+        case ocrText
+        case imageBody
+    }
+
+    private let imageView = NSImageView()
+    private lazy var analysisOverlay = ImageAnalysisOverlayView(self)
+    private let regionOverlay = OCRRegionOverlayView()
+    private lazy var ocrButton = makeOCRButton()
+    private var currentAnalysis: ImageAnalysis?
+    private var recognizedTextRegions: [CGRect] = []
+    private var preparedMouseDownTimestamp: TimeInterval?
+
+    override var isFlipped: Bool {
+        true
+    }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        configureViews()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        configureViews()
+    }
+
+    override func layout() {
+        super.layout()
+        regionOverlay.imageRect = displayedImageRect()
+    }
+
+    func setImage(_ image: NSImage) {
+        if imageView.image !== image {
+            imageView.image = image
+        }
+    }
+
+    func setAnalysis(_ analysis: ImageAnalysis?, textRegions: [CGRect]) {
+        if currentAnalysis == nil, analysis == nil, recognizedTextRegions.isEmpty,
+           textRegions.isEmpty {
+            return
+        }
+        if let currentAnalysis, let analysis, currentAnalysis === analysis,
+           recognizedTextRegions == textRegions {
+            return
+        }
+
+        currentAnalysis = analysis
+        recognizedTextRegions = textRegions
+        regionOverlay.regions = textRegions
+        analysisOverlay.analysis = analysis
+        analysisOverlay.preferredInteractionTypes = analysis == nil ? [] : [.textSelection]
+        ocrButton.isHidden = analysis == nil
+        if analysis == nil {
+            ocrButton.state = .off
+            regionOverlay.showsRegions = false
+        }
+    }
+
+    func interactionRegion(at point: NSPoint) -> InteractionRegion {
+        if let control = ocrControlTarget(at: point) {
+            return .ocrControl(control)
+        }
+
+        let overlayPoint = analysisOverlay.convert(point, from: self)
+        guard currentAnalysis != nil,
+              containsRecognizedText(at: point, overlayPoint: overlayPoint)
+        else {
+            return .imageBody
+        }
+
+        return .ocrText
+    }
+
+    func liveTextTarget(at point: NSPoint) -> NSView {
+        let overlayPoint = analysisOverlay.convert(point, from: self)
+        return analysisOverlay.hitTest(overlayPoint) ?? analysisOverlay
+    }
+
+    func ocrControlTarget(at point: NSPoint) -> NSView? {
+        guard !ocrButton.isHidden else {
+            return nil
+        }
+
+        let buttonPoint = ocrButton.convert(point, from: self)
+        return ocrButton.bounds.contains(buttonPoint) ? ocrButton : nil
+    }
+
+    func resetTextSelection() {
+        if analysisOverlay.hasActiveTextSelection {
+            analysisOverlay.resetSelection()
+        }
+    }
+
+    func prepareForTextSelection(with event: NSEvent) {
+        guard event.type == .leftMouseDown,
+              preparedMouseDownTimestamp != event.timestamp
+        else {
+            return
+        }
+
+        preparedMouseDownTimestamp = event.timestamp
+        resetTextSelection()
+    }
+
+    func contentsRect(for overlayView: ImageAnalysisOverlayView) -> CGRect {
+        CGRect(x: 0, y: 0, width: 1, height: 1)
+    }
+
+    func contentView(for overlayView: ImageAnalysisOverlayView) -> NSView? {
+        imageView
+    }
+
+    func overlayView(
+        _ overlayView: ImageAnalysisOverlayView,
+        shouldBeginAt point: CGPoint,
+        forAnalysisType analysisType: ImageAnalysisOverlayView.InteractionTypes
+    ) -> Bool {
+        analysisType.contains(.textSelection)
+    }
+
+    func overlayView(
+        _ overlayView: ImageAnalysisOverlayView,
+        highlightSelectedItemsDidChange highlightSelectedItems: Bool
+    ) {
+        ocrButton.state = highlightSelectedItems ? .on : .off
+        regionOverlay.showsRegions = highlightSelectedItems
+        updateOCRButtonAppearance()
+    }
+
+    private func configureViews() {
+        wantsLayer = true
+        layer?.cornerRadius = 6
+        layer?.masksToBounds = true
+
+        imageView.imageScaling = .scaleProportionallyUpOrDown
+        imageView.imageAlignment = .alignCenter
+        imageView.translatesAutoresizingMaskIntoConstraints = false
+
+        analysisOverlay.translatesAutoresizingMaskIntoConstraints = false
+        regionOverlay.translatesAutoresizingMaskIntoConstraints = false
+        analysisOverlay.trackingImageView = imageView
+        analysisOverlay.isSupplementaryInterfaceHidden = true
+        analysisOverlay.preferredInteractionTypes = []
+
+        addSubview(imageView)
+        addSubview(analysisOverlay)
+        addSubview(regionOverlay)
+        addSubview(ocrButton)
+        NSLayoutConstraint.activate([
+            imageView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            imageView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            imageView.topAnchor.constraint(equalTo: topAnchor),
+            imageView.bottomAnchor.constraint(equalTo: bottomAnchor),
+            analysisOverlay.leadingAnchor.constraint(equalTo: leadingAnchor),
+            analysisOverlay.trailingAnchor.constraint(equalTo: trailingAnchor),
+            analysisOverlay.topAnchor.constraint(equalTo: topAnchor),
+            analysisOverlay.bottomAnchor.constraint(equalTo: bottomAnchor),
+            regionOverlay.leadingAnchor.constraint(equalTo: leadingAnchor),
+            regionOverlay.trailingAnchor.constraint(equalTo: trailingAnchor),
+            regionOverlay.topAnchor.constraint(equalTo: topAnchor),
+            regionOverlay.bottomAnchor.constraint(equalTo: bottomAnchor),
+            ocrButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
+            ocrButton.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -6),
+            ocrButton.widthAnchor.constraint(equalToConstant: 24),
+            ocrButton.heightAnchor.constraint(equalToConstant: 24)
+        ])
+    }
+
+    private func makeOCRButton() -> OCRHighlightButton {
+        let image = NSImage(
+            systemSymbolName: "text.viewfinder",
+            accessibilityDescription: "Show recognized text"
+        )?.withSymbolConfiguration(
+            NSImage.SymbolConfiguration(pointSize: 14, weight: .semibold)
+        )
+        let button = OCRHighlightButton(symbol: image ?? NSImage())
+        button.target = self
+        button.action = #selector(toggleOCRHighlights(_:))
+        button.setButtonType(.toggle)
+        button.isBordered = false
+        button.focusRingType = .none
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.isHidden = true
+        button.wantsLayer = true
+        button.layer?.cornerRadius = 6
+        button.layer?.borderWidth = 1
+        button.layer?.shadowColor = NSColor.black.cgColor
+        button.layer?.shadowOpacity = 0.18
+        button.layer?.shadowRadius = 2
+        button.layer?.shadowOffset = NSSize(width: 0, height: -1)
+        button.setAccessibilityLabel("Show recognized text")
+        button.toolTip = "Show recognized text"
+        updateOCRButtonAppearance(button)
+        return button
+    }
+
+    @objc private func toggleOCRHighlights(_ sender: NSButton) {
+        analysisOverlay.selectableItemsHighlighted = sender.state == .on
+        regionOverlay.showsRegions = sender.state == .on
+        updateOCRButtonAppearance()
+    }
+
+    private func updateOCRButtonAppearance(_ button: OCRHighlightButton? = nil) {
+        let button = button ?? ocrButton
+        let title = button.state == .on
+            ? "Hide recognized text"
+            : "Show recognized text"
+        button.setAccessibilityLabel(title)
+        button.toolTip = title
+
+        if button.state == .on {
+            button.layer?.backgroundColor = NSColor.controlAccentColor
+                .withAlphaComponent(0.88)
+                .cgColor
+            button.layer?.borderColor = NSColor.white.withAlphaComponent(0.72).cgColor
+            button.symbolColor = .white
+        } else {
+            button.layer?.backgroundColor = NSColor.white
+                .withAlphaComponent(0.98)
+                .cgColor
+            button.layer?.borderColor = NSColor.black.withAlphaComponent(0.38).cgColor
+            button.symbolColor = NSColor.black.withAlphaComponent(0.9)
+        }
+    }
+
+    private func containsRecognizedText(
+        at point: NSPoint,
+        overlayPoint: NSPoint
+    ) -> Bool {
+        if recognizedTextRegions.isEmpty {
+            return analysisOverlay.analysisHasText(at: overlayPoint)
+        }
+
+        let contentRect = displayedImageRect()
+        return recognizedTextRegions.contains { region in
+            let viewRect = NSRect(
+                x: contentRect.minX + region.minX * contentRect.width,
+                y: contentRect.minY + (1 - region.maxY) * contentRect.height,
+                width: region.width * contentRect.width,
+                height: region.height * contentRect.height
+            ).insetBy(dx: -2, dy: -2)
+            return viewRect.contains(point)
+        }
+    }
+
+    private func displayedImageRect() -> NSRect {
+        guard let image = imageView.image,
+              image.size.width > 0,
+              image.size.height > 0,
+              bounds.width > 0,
+              bounds.height > 0
+        else {
+            return bounds
+        }
+
+        let scale = min(
+            bounds.width / image.size.width,
+            bounds.height / image.size.height
+        )
+        let size = NSSize(
+            width: image.size.width * scale,
+            height: image.size.height * scale
+        )
+        return NSRect(
+            x: bounds.midX - size.width / 2,
+            y: bounds.midY - size.height / 2,
+            width: size.width,
+            height: size.height
+        )
+    }
+
 }
 
 private final class TodoCheckboxOverlayView: NSView {
