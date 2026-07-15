@@ -395,6 +395,17 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         configureViews()
     }
 
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        if !slashPaletteView.isHidden {
+            let palettePoint = slashPaletteView.convert(point, from: self)
+            if slashPaletteView.bounds.contains(palettePoint) {
+                return slashPaletteView.hitTest(palettePoint) ?? slashPaletteView
+            }
+        }
+
+        return super.hitTest(point)
+    }
+
     func setTheme(_ palette: AppTheme.Palette) {
         guard self.palette != palette else {
             return
@@ -500,7 +511,9 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
 
         isRefreshingSelectionDisplay = true
         snapSelectionAroundImageIfNeeded()
-        applyDisplayAttributes()
+        if NSApp.currentEvent?.type != .leftMouseDragged {
+            applyDisplayAttributes()
+        }
         refreshOverlay()
         if slashCommandContextForCurrentSelection() == nil {
             hideSlashCommandPalette()
@@ -687,6 +700,11 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         }
         textView.checkboxMouseDownHandler = { [weak self] event in
             self?.handleCheckboxMouseDown(event) ?? false
+        }
+        textView.selectionDragDidEndHandler = { [weak self] in
+            guard let self else { return }
+            self.applyDisplayAttributes()
+            self.refreshOverlay()
         }
         textView.imageCursorProvider = { [weak self] point in
             guard let self else {
@@ -3776,6 +3794,21 @@ private final class SlashCommandPaletteView: NSView {
         true
     }
 
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard bounds.contains(point) else {
+            return nil
+        }
+
+        for case let button as SlashCommandButton in stackView.arrangedSubviews.reversed() {
+            let buttonPoint = button.convert(point, from: self)
+            if button.bounds.contains(buttonPoint) {
+                return button
+            }
+        }
+
+        return self
+    }
+
     func configure(commands: [(title: String, syntaxHint: String, rawValue: String)]) {
         stackView.arrangedSubviews.forEach { view in
             stackView.removeArrangedSubview(view)
@@ -3940,6 +3973,9 @@ private final class SlashCommandPaletteView: NSView {
 
     func resetForOpening() {
         selectedIndex = 0
+        for case let button as SlashCommandButton in stackView.arrangedSubviews {
+            button.resetPressedState()
+        }
         layoutSubtreeIfNeeded()
         scrollTo(y: 0)
         updateButtonColors()
@@ -4033,6 +4069,9 @@ private final class SlashCommandButton: NSButton {
     private let titleLabel = SlashCommandLabel(labelWithString: "")
     private let hintLabel = SlashCommandLabel(labelWithString: "")
     private var trackingArea: NSTrackingArea?
+    private var isPressedForPalette = false {
+        didSet { needsDisplay = true }
+    }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -4088,6 +4127,26 @@ private final class SlashCommandButton: NSButton {
         bounds.contains(point) ? self : nil
     }
 
+    override func mouseDown(with event: NSEvent) {
+        guard bounds.contains(convert(event.locationInWindow, from: nil)) else {
+            return
+        }
+        isPressedForPalette = true
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        defer { isPressedForPalette = false }
+
+        guard bounds.contains(convert(event.locationInWindow, from: nil)) else {
+            return
+        }
+        sendAction(action, to: target)
+    }
+
+    func resetPressedState() {
+        isPressedForPalette = false
+    }
+
     override func resetCursorRects() {
         super.resetCursorRects()
         addCursorRect(bounds, cursor: .pointingHand)
@@ -4113,6 +4172,10 @@ private final class SlashCommandButton: NSButton {
         NSCursor.pointingHand.set()
     }
 
+    override func mouseExited(with event: NSEvent) {
+        isPressedForPalette = false
+    }
+
     override func mouseMoved(with event: NSEvent) {
         NSCursor.pointingHand.set()
         if let rawValue = identifier?.rawValue {
@@ -4125,9 +4188,9 @@ private final class SlashCommandButton: NSButton {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        if isSelectedForPalette || isHighlighted {
+        if isSelectedForPalette || isPressedForPalette {
             let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 0, dy: 1), xRadius: 5, yRadius: 5)
-            palette.accentNS.withAlphaComponent(isHighlighted ? 0.4 : 0.3).setFill()
+            palette.accentNS.withAlphaComponent(isPressedForPalette ? 0.4 : 0.3).setFill()
             path.fill()
         }
     }
@@ -4162,6 +4225,7 @@ private final class TodoTextView: NSTextView {
     var pasteHandler: (() -> Bool)?
     var canPasteHandler: (() -> Bool)?
     var checkboxMouseDownHandler: ((NSEvent) -> Bool)?
+    var selectionDragDidEndHandler: (() -> Void)?
     var imageCursorProvider: ((NSPoint) -> NSCursor?)?
     var imageCursorRects: [NSRect] = [] {
         didSet {
@@ -4259,6 +4323,11 @@ private final class TodoTextView: NSTextView {
         }
 
         super.mouseDown(with: event)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        super.mouseUp(with: event)
+        selectionDragDidEndHandler?()
     }
 
     override func updateTrackingAreas() {
