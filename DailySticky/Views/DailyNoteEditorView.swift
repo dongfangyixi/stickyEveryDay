@@ -557,10 +557,16 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             return insertReturn()
 
         case #selector(NSResponder.insertTab(_:)):
-            return adjustIndent(by: 4)
+            if textView.selectedRange().length > 0 {
+                return adjustSelectedLinesIndent(by: 4)
+            }
+            return adjustCaretIndent(by: 4)
 
         case #selector(NSResponder.insertBacktab(_:)):
-            return adjustIndent(by: -4)
+            if textView.selectedRange().length > 0 {
+                return adjustSelectedLinesIndent(by: -4)
+            }
+            return adjustCaretIndent(by: -4)
 
         case #selector(NSResponder.moveUp(_:)):
             return moveSlashCommandSelection(by: -1)
@@ -670,9 +676,6 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         textView.allowsDocumentBackgroundColorChange = false
         textView.font = baseFont
         textView.defaultParagraphStyle = baseParagraphStyle()
-        textView.selectedTextAttributes = [
-            .backgroundColor: NSColor.selectedTextBackgroundColor
-        ]
         textView.textContainerInset = NSSize(width: 8, height: 10)
         textView.textContainer?.lineFragmentPadding = 0
         textView.isVerticallyResizable = true
@@ -796,11 +799,21 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
 
     private func applyTheme() {
         textView.textColor = palette.textNS
+        textView.selectedTextAttributes = [
+            .backgroundColor: palette.accentNS,
+            .foregroundColor: selectedTextColor()
+        ]
         updateInsertionPointColor(showCustomImageCaret: false)
         textView.typingAttributes = baseAttributes()
         overlayView.palette = palette
         imageOverlayView.palette = palette
         slashPaletteView.palette = palette
+    }
+
+    private func selectedTextColor() -> NSColor {
+        palette.kind == .dark
+            ? NSColor(calibratedWhite: 0.08, alpha: 1)
+            : .white
     }
 
     private func updateInsertionPointColor(showCustomImageCaret: Bool) {
@@ -1253,39 +1266,167 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         }
     }
 
-    private func adjustIndent(by delta: Int) -> Bool {
+    private func adjustCaretIndent(by delta: Int) -> Bool {
         let selectedRange = textView.selectedRange()
         guard selectedRange.length == 0,
-              let line = lineInfo(at: selectedRange.location)
+              let line = lineInfo(at: selectedRange.location),
+              selectedRange.location >= line.contentRange.location
         else {
+            return true
+        }
+
+        if delta > 0 {
+            let indentation = String(repeating: " ", count: delta)
+            return applyTextStorageEdit(
+                range: selectedRange,
+                replacement: indentation,
+                selectedRange: NSRange(
+                    location: selectedRange.location + (indentation as NSString).length,
+                    length: 0
+                )
+            ) {}
+        }
+
+        let lineStart = line.contentRange.location
+        let precedingLength = selectedRange.location - lineStart
+        guard precedingLength > 0 else {
+            return true
+        }
+
+        let nsText = textView.string as NSString
+        let previousCharacterRange = NSRange(location: selectedRange.location - 1, length: 1)
+        if nsText.substring(with: previousCharacterRange) == "\t" {
+            return applyTextStorageEdit(
+                range: previousCharacterRange,
+                replacement: "",
+                selectedRange: NSRange(location: selectedRange.location - 1, length: 0)
+            ) {}
+        }
+
+        let candidateLength = min(-delta, precedingLength)
+        let candidateRange = NSRange(
+            location: selectedRange.location - candidateLength,
+            length: candidateLength
+        )
+        let trailingSpaces = nsText.substring(with: candidateRange).reversed().prefix { $0 == " " }.count
+        guard trailingSpaces > 0 else {
+            return true
+        }
+
+        let removalRange = NSRange(
+            location: selectedRange.location - trailingSpaces,
+            length: trailingSpaces
+        )
+        return applyTextStorageEdit(
+            range: removalRange,
+            replacement: "",
+            selectedRange: NSRange(location: removalRange.location, length: 0)
+        ) {}
+    }
+
+    private func adjustSelectedLinesIndent(by delta: Int) -> Bool {
+        let selectedRange = textView.selectedRange()
+        guard selectedRange.length > 0 else {
             return false
         }
 
-        let undoSnapshot = editorSnapshot()
-        switch kind(at: line.index) {
-        case .task(let indentColumns, let isCompleted):
-            lineKinds[line.index] = .task(
-                indentColumns: max(0, indentColumns + delta),
-                isCompleted: isCompleted
-            )
-        case .bullet(let indentColumns):
-            lineKinds[line.index] = .bullet(indentColumns: max(0, indentColumns + delta))
-        case .numbered(let indentColumns, let number):
-            let newIndentColumns = max(0, indentColumns + delta)
-            lineKinds[line.index] = .numbered(
-                indentColumns: newIndentColumns,
-                number: newIndentColumns == indentColumns ? number : 1
-            )
+        let infos = lineInfos()
+        let selectionEndLocation = max(selectedRange.location, NSMaxRange(selectedRange) - 1)
+        guard let firstLineIndex = lineInfo(at: selectedRange.location)?.index,
+              let lastLineIndex = lineInfo(at: selectionEndLocation)?.index,
+              infos.indices.contains(firstLineIndex),
+              infos.indices.contains(lastLineIndex)
+        else {
+            return true
+        }
+
+        let selectedLineRange = min(firstLineIndex, lastLineIndex)...max(firstLineIndex, lastLineIndex)
+        var updatedLines = displayLines()
+        var updatedKinds = lineKinds
+        var didChange = false
+
+        for lineIndex in selectedLineRange {
+            guard updatedLines.indices.contains(lineIndex),
+                  updatedKinds.indices.contains(lineIndex)
+            else {
+                continue
+            }
+
+            switch updatedKinds[lineIndex] {
+            case .task(let indentColumns, let isCompleted):
+                let newIndentColumns = max(0, indentColumns + delta)
+                guard newIndentColumns != indentColumns else { continue }
+                updatedKinds[lineIndex] = .task(
+                    indentColumns: newIndentColumns,
+                    isCompleted: isCompleted
+                )
+                didChange = true
+
+            case .bullet(let indentColumns):
+                let newIndentColumns = max(0, indentColumns + delta)
+                guard newIndentColumns != indentColumns else { continue }
+                updatedKinds[lineIndex] = .bullet(indentColumns: newIndentColumns)
+                didChange = true
+
+            case .numbered(let indentColumns, let number):
+                let newIndentColumns = max(0, indentColumns + delta)
+                guard newIndentColumns != indentColumns else { continue }
+                updatedKinds[lineIndex] = .numbered(
+                    indentColumns: newIndentColumns,
+                    number: newIndentColumns == indentColumns ? number : 1
+                )
+                didChange = true
+
+            case .continuation(let indentColumns):
+                let newIndentColumns = max(0, indentColumns + delta)
+                guard newIndentColumns != indentColumns else { continue }
+                updatedKinds[lineIndex] = .continuation(indentColumns: newIndentColumns)
+                didChange = true
+
+            case .normal:
+                let originalLine = updatedLines[lineIndex]
+                if delta > 0 {
+                    updatedLines[lineIndex] = String(repeating: " ", count: delta) + originalLine
+                    didChange = true
+                } else if originalLine.hasPrefix("\t") {
+                    updatedLines[lineIndex].removeFirst()
+                    didChange = true
+                } else {
+                    let removableSpaces = min(-delta, originalLine.prefix { $0 == " " }.count)
+                    if removableSpaces > 0 {
+                        updatedLines[lineIndex].removeFirst(removableSpaces)
+                        didChange = true
+                    }
+                }
+
+            case .quote, .codeBlock, .horizontalRule, .tableRow:
+                continue
+            }
+        }
+
+        guard didChange else {
+            return true
+        }
+
+        let updatedText = updatedLines.joined(separator: "\n")
+        let updatedSelectionStart = updatedLines[..<selectedLineRange.lowerBound].reduce(0) {
+            $0 + ($1 as NSString).length + 1
+        }
+        let selectedLinesText = updatedLines[selectedLineRange].joined(separator: "\n")
+        let updatedSelectedRange = NSRange(
+            location: updatedSelectionStart,
+            length: (selectedLinesText as NSString).length
+        )
+        let fullRange = NSRange(location: 0, length: (textView.string as NSString).length)
+
+        return applyTextStorageEdit(
+            range: fullRange,
+            replacement: updatedText,
+            selectedRange: updatedSelectedRange
+        ) {
+            lineKinds = updatedKinds
             renumberNumberedLists()
-        case .continuation(let indentColumns):
-            lineKinds[line.index] = .continuation(indentColumns: max(0, indentColumns + delta))
-        case .normal, .quote, .codeBlock, .horizontalRule, .tableRow:
-            return false
         }
-
-        notifyTextChangedAndRefresh(scrollSelection: true)
-        registerUndoSnapshotIfChanged(from: undoSnapshot)
-        return true
     }
 
     private func renumberNumberedLists() {
