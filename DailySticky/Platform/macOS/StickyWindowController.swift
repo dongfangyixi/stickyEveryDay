@@ -155,7 +155,7 @@ final class StickyWindowController: NSObject, NSWindowDelegate {
 
         let window = StickyWindow(
             contentRect: frame,
-            styleMask: [.borderless, .resizable],
+            styleMask: [.borderless, .closable, .resizable],
             backing: .buffered,
             defer: false
         )

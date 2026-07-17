@@ -29,6 +29,13 @@ struct DailyStickyApp: App {
             .frame(width: 420)
         }
         .commands {
+            CommandMenu("File") {
+                Button("Close Window") {
+                    appDelegate.closeActiveWindow()
+                }
+                .keyboardShortcut("w", modifiers: [.command])
+            }
+
             CommandGroup(replacing: .help) {
                 Button("Pinaday Quick Start") {
                     appDelegate.showQuickStartGuide()

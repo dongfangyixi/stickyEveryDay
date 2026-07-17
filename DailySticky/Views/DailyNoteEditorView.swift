@@ -799,10 +799,7 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
 
     private func applyTheme() {
         textView.textColor = palette.textNS
-        textView.selectedTextAttributes = [
-            .backgroundColor: palette.accentNS,
-            .foregroundColor: selectedTextColor()
-        ]
+        updateSelectionAppearance()
         updateInsertionPointColor(showCustomImageCaret: false)
         textView.typingAttributes = baseAttributes()
         overlayView.palette = palette
@@ -810,10 +807,20 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         slashPaletteView.palette = palette
     }
 
-    private func selectedTextColor() -> NSColor {
-        palette.kind == .dark
-            ? NSColor(calibratedWhite: 0.08, alpha: 1)
-            : .white
+    private func updateSelectionAppearance() {
+        textView.selectedTextAttributes = [
+            .backgroundColor: selectedTextBackgroundColor(),
+            .foregroundColor: NSColor.white
+        ]
+        textView.setNeedsDisplay(textView.visibleRect)
+    }
+
+    private func selectedTextBackgroundColor() -> NSColor {
+        if palette.kind == .dark {
+            return NSColor(calibratedRed: 0.16, green: 0.42, blue: 0.45, alpha: 1)
+        }
+
+        return palette.accentNS
     }
 
     private func updateInsertionPointColor(showCustomImageCaret: Bool) {
@@ -1343,11 +1350,13 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         let selectedLineRange = min(firstLineIndex, lastLineIndex)...max(firstLineIndex, lastLineIndex)
         var updatedLines = displayLines()
         var updatedKinds = lineKinds
+        var textEdits: [(range: NSRange, insertedLength: Int)] = []
         var didChange = false
 
         for lineIndex in selectedLineRange {
             guard updatedLines.indices.contains(lineIndex),
-                  updatedKinds.indices.contains(lineIndex)
+                  updatedKinds.indices.contains(lineIndex),
+                  infos.indices.contains(lineIndex)
             else {
                 continue
             }
@@ -1387,14 +1396,29 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
                 let originalLine = updatedLines[lineIndex]
                 if delta > 0 {
                     updatedLines[lineIndex] = String(repeating: " ", count: delta) + originalLine
+                    textEdits.append((
+                        range: NSRange(location: infos[lineIndex].contentRange.location, length: 0),
+                        insertedLength: delta
+                    ))
                     didChange = true
                 } else if originalLine.hasPrefix("\t") {
                     updatedLines[lineIndex].removeFirst()
+                    textEdits.append((
+                        range: NSRange(location: infos[lineIndex].contentRange.location, length: 1),
+                        insertedLength: 0
+                    ))
                     didChange = true
                 } else {
                     let removableSpaces = min(-delta, originalLine.prefix { $0 == " " }.count)
                     if removableSpaces > 0 {
                         updatedLines[lineIndex].removeFirst(removableSpaces)
+                        textEdits.append((
+                            range: NSRange(
+                                location: infos[lineIndex].contentRange.location,
+                                length: removableSpaces
+                            ),
+                            insertedLength: 0
+                        ))
                         didChange = true
                     }
                 }
@@ -1409,13 +1433,18 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         }
 
         let updatedText = updatedLines.joined(separator: "\n")
-        let updatedSelectionStart = updatedLines[..<selectedLineRange.lowerBound].reduce(0) {
-            $0 + ($1 as NSString).length + 1
-        }
-        let selectedLinesText = updatedLines[selectedLineRange].joined(separator: "\n")
+        let sortedTextEdits = textEdits.sorted { $0.range.location < $1.range.location }
+        let updatedSelectionStart = mappedLocation(
+            selectedRange.location,
+            through: sortedTextEdits
+        )
+        let updatedSelectionEnd = mappedLocation(
+            NSMaxRange(selectedRange),
+            through: sortedTextEdits
+        )
         let updatedSelectedRange = NSRange(
             location: updatedSelectionStart,
-            length: (selectedLinesText as NSString).length
+            length: max(0, updatedSelectionEnd - updatedSelectionStart)
         )
         let fullRange = NSRange(location: 0, length: (textView.string as NSString).length)
 
@@ -1427,6 +1456,37 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             lineKinds = updatedKinds
             renumberNumberedLists()
         }
+    }
+
+    private func mappedLocation(
+        _ originalLocation: Int,
+        through edits: [(range: NSRange, insertedLength: Int)]
+    ) -> Int {
+        var offset = 0
+
+        for edit in edits {
+            let editStart = edit.range.location
+            let editEnd = NSMaxRange(edit.range)
+
+            if edit.range.length == 0 {
+                if originalLocation >= editStart {
+                    offset += edit.insertedLength
+                }
+                continue
+            }
+
+            if originalLocation <= editStart {
+                break
+            }
+
+            if originalLocation < editEnd {
+                return editStart + offset + edit.insertedLength
+            }
+
+            offset += edit.insertedLength - edit.range.length
+        }
+
+        return originalLocation + offset
     }
 
     private func renumberNumberedLists() {
@@ -1612,6 +1672,11 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         }
 
         guard let structuredDelete = structuredLineDeletionRange(for: selectedRange) else {
+            return false
+        }
+
+        let structuredIntersection = NSIntersectionRange(selectedRange, structuredDelete.range)
+        guard structuredIntersection.length == selectedRange.length else {
             return false
         }
 
