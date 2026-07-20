@@ -274,32 +274,34 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
                 return self == .todo
             }
 
+            let searchTerms: [String]
             switch self {
             case .todo:
-                return ["todo", "task", "check", "checkbox"].contains(normalizedQuery)
+                searchTerms = ["todo list", "todo", "task", "check", "checkbox"]
             case .heading1:
-                return ["h1", "heading1", "heading 1", "title"].contains(normalizedQuery)
+                searchTerms = ["heading 1", "heading1", "h1", "title"]
             case .heading2:
-                return ["h2", "heading2", "heading 2"].contains(normalizedQuery)
+                searchTerms = ["heading 2", "heading2", "h2"]
             case .heading3:
-                return ["h3", "heading3", "heading 3"].contains(normalizedQuery)
+                searchTerms = ["heading 3", "heading3", "h3"]
             case .heading4:
-                return ["h4", "heading4", "heading 4"].contains(normalizedQuery)
+                searchTerms = ["heading 4", "heading4", "h4"]
             case .bulletedList:
-                return ["bullet", "bulleted", "bulletedlist", "bulleted list", "ul", "list"].contains(normalizedQuery)
+                searchTerms = ["bulleted list", "bulleted", "bullet", "ul", "list"]
             case .numberedList:
-                return ["number", "numbered", "numberedlist", "numbered list", "ol"].contains(normalizedQuery)
+                searchTerms = ["numbered list", "numbered", "number", "ol"]
             case .quote:
-                return ["quote", "blockquote"].contains(normalizedQuery)
+                searchTerms = ["quote", "blockquote"]
             case .codeBlock:
-                return normalizedQuery == "code"
-                    || normalizedQuery == "codeblock"
-                    || normalizedQuery == "code block"
-                    || normalizedQuery.hasPrefix("code ")
-                    || normalizedQuery.hasPrefix("```")
+                if normalizedQuery.hasPrefix("code ") || normalizedQuery.hasPrefix("```") {
+                    return true
+                }
+                searchTerms = ["code block", "codeblock", "code"]
             case .divider:
-                return ["divider", "separator", "splitter", "spliter", "hr", "rule", "---"].contains(normalizedQuery)
+                searchTerms = ["divider", "separator", "splitter", "spliter", "hr", "rule", "---"]
             }
+
+            return searchTerms.contains { $0.hasPrefix(normalizedQuery) }
         }
     }
 
@@ -358,6 +360,7 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     private var palette: AppTheme.Palette
     private var dateKey: String
     private var imageCache: [String: NSImage] = [:]
+    private var selectedImageLineIndex: Int?
     private var resizingImagePreview: (lineIndex: Int, width: CGFloat)?
     private var lastAppliedImageLayoutWidth: CGFloat?
     private var lineKinds: [LineKind] = [.normal]
@@ -419,6 +422,7 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     func setDateKey(_ dateKey: String) {
         if self.dateKey != dateKey {
             imageInteractionView.clearAnalysisCache()
+            selectedImageLineIndex = nil
         }
         self.dateKey = dateKey
     }
@@ -443,6 +447,7 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             return
         }
 
+        selectedImageLineIndex = nil
         isApplyingProgrammaticChange = true
         textView.textStorage?.setAttributedString(
             NSAttributedString(string: document.text, attributes: baseAttributes())
@@ -459,6 +464,7 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             return
         }
 
+        selectedImageLineIndex = nil
         let undoSnapshot = pendingUndoSnapshot
         pendingUndoSnapshot = nil
         let defaultTextEdit = pendingDefaultTextEdit
@@ -511,6 +517,7 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
 
         isRefreshingSelectionDisplay = true
         snapSelectionAroundImageIfNeeded()
+        synchronizeSelectedImageWithTextSelection()
         if NSApp.currentEvent?.type != .leftMouseDragged {
             applyDisplayAttributes()
         }
@@ -687,6 +694,12 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         textView.copyHandler = { [weak self] in
             self?.copySelectionToPasteboard() ?? false
         }
+        textView.canCopyHandler = { [weak self] in
+            self?.selectedImageItem() != nil
+        }
+        textView.selectAllHandler = { [weak self] in
+            self?.selectAllTextInSelectedImage() ?? false
+        }
         textView.cutHandler = { [weak self] in
             self?.cutSelectionToPasteboard() ?? false
         }
@@ -733,6 +746,9 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
 
             let point = self.imageOverlayView.convert(event.locationInWindow, from: nil)
             _ = self.resizeImage(item, from: point)
+        }
+        imageInteractionView.onCopyImage = { [weak self] item in
+            self?.copyImageToPasteboard(item) ?? false
         }
 
         imageOverlayView.translatesAutoresizingMaskIntoConstraints = false
@@ -998,11 +1014,28 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             return
         }
 
+        let commands = SlashCommand.allCases
+        let normalizedQuery = context.query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let matchingIndex: Int
+        if normalizedQuery.isEmpty {
+            matchingIndex = 0
+        } else if let index = commands.firstIndex(where: { $0.matches(query: normalizedQuery) }) {
+            matchingIndex = index
+        } else {
+            hideSlashCommandPalette()
+            return
+        }
+
+        let isOpening = slashCommandContext == nil || slashPaletteView.isHidden
         slashCommandContext = context
-        selectedSlashCommandIndex = 0
+        selectedSlashCommandIndex = matchingIndex
         slashPaletteView.isHidden = false
+        if isOpening {
+            slashPaletteView.resetForOpening(selectedIndex: matchingIndex)
+        } else {
+            slashPaletteView.selectedIndex = matchingIndex
+        }
         positionSlashCommandPalette()
-        slashPaletteView.resetForOpening()
     }
 
     private func slashCommandContextForCurrentSelection() -> SlashCommandContext? {
@@ -1014,33 +1047,28 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             return nil
         }
 
-        let slashLocation = selectedRange.location - 1
-        guard slashLocation >= line.contentRange.location,
-              slashLocation < NSMaxRange(line.contentRange)
-        else {
-            return nil
-        }
-
         let nsText = textView.string as NSString
-        guard nsText.substring(with: NSRange(location: slashLocation, length: 1)) == "/" else {
+        let prefixRange = NSRange(
+            location: line.contentRange.location,
+            length: selectedRange.location - line.contentRange.location
+        )
+        let prefixText = nsText.substring(with: prefixRange)
+        guard let slashIndex = prefixText.firstIndex(of: "/") else {
             return nil
         }
 
-        let textBeforeSlashLength = slashLocation - line.contentRange.location
-        let textBeforeSlash = textBeforeSlashLength > 0
-            ? nsText.substring(with: NSRange(location: line.contentRange.location, length: textBeforeSlashLength))
-            : ""
+        let textBeforeSlash = String(prefixText[..<slashIndex])
         guard textBeforeSlash.trimmingCharacters(in: .whitespaces).isEmpty else {
             return nil
         }
 
+        let queryStart = prefixText.index(after: slashIndex)
+        let query = String(prefixText[queryStart...])
+
         return SlashCommandContext(
-            slashRange: NSRange(
-                location: line.contentRange.location,
-                length: textBeforeSlashLength + 1
-            ),
+            slashRange: prefixRange,
             lineIndex: line.index,
-            query: ""
+            query: query
         )
     }
 
@@ -1158,16 +1186,18 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     }
 
     private func slashCommand(for context: SlashCommandContext) -> SlashCommand? {
-        if context.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            let commands = SlashCommand.allCases
-            guard commands.indices.contains(selectedSlashCommandIndex) else {
-                return .todo
-            }
-
+        let commands = SlashCommand.allCases
+        if slashCommandContext != nil,
+           !slashPaletteView.isHidden,
+           commands.indices.contains(selectedSlashCommandIndex) {
             return commands[selectedSlashCommandIndex]
         }
 
-        return SlashCommand.allCases.first(where: { $0.matches(query: context.query) })
+        if context.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return .todo
+        }
+
+        return commands.first(where: { $0.matches(query: context.query) })
     }
 
     private func codeLanguage(fromSlashQuery query: String) -> String? {
@@ -1583,6 +1613,7 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     }
 
     private func deleteImageLine(_ line: DisplayLineInfo) -> Bool {
+        selectedImageLineIndex = nil
         let infos = lineInfos()
         let deleteRange: NSRange
         let selectedRangeAfterDelete: NSRange
@@ -1769,17 +1800,87 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     }
 
     private func copySelectionToPasteboard() -> Bool {
+        if let imageItem = selectedImageItem() {
+            return copyImageToPasteboard(imageItem)
+        }
+
         let selectedRange = textView.selectedRange()
         guard selectedRange.length > 0,
               let markdown = markdownText(in: selectedRange)
         else {
             return false
         }
-
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(markdown, forType: .string)
         return true
+    }
+
+    private func selectedImageItem() -> MarkdownImageOverlayItem? {
+        let infos = lineInfos()
+        guard let lineIndex = selectedImageLineIndex,
+              infos.indices.contains(lineIndex),
+              let reference = imageReference(in: infos[lineIndex].text),
+              let image = image(for: reference)
+        else {
+            return nil
+        }
+
+        return MarkdownImageOverlayItem(
+            attachmentPath: reference.path,
+            image: image,
+            altText: reference.altText,
+            frame: .zero,
+            lineIndex: lineIndex,
+            isSelected: true
+        )
+    }
+
+    private func copyImageToPasteboard(_ item: MarkdownImageOverlayItem) -> Bool {
+        let pasteboardItem = NSPasteboardItem()
+        var didWriteImage = false
+
+        if let pngData = Self.pngData(from: item.image) {
+            didWriteImage = pasteboardItem.setData(pngData, forType: .png)
+        }
+        if let tiffData = item.image.tiffRepresentation {
+            didWriteImage = pasteboardItem.setData(tiffData, forType: .tiff) || didWriteImage
+        }
+
+        let infos = lineInfos()
+        if infos.indices.contains(item.lineIndex),
+           let reference = imageReference(in: infos[item.lineIndex].text) {
+            pasteboardItem.setString(
+                markdownImageLine(for: reference, width: reference.width),
+                forType: .string
+            )
+        }
+
+        guard didWriteImage else {
+            return false
+        }
+
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        return pasteboard.writeObjects([pasteboardItem])
+    }
+
+    private func selectAllTextInSelectedImage() -> Bool {
+        guard let selectedImageLineIndex else {
+            return false
+        }
+
+        return imageInteractionView.selectAllText(in: selectedImageLineIndex)
+    }
+
+    private static func pngData(from image: NSImage) -> Data? {
+        guard let tiffData = image.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiffData)
+        else {
+            return nil
+        }
+
+        return bitmap.representation(using: .png, properties: [:])
     }
 
     private func cutSelectionToPasteboard() -> Bool {
@@ -2242,12 +2343,29 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         }
 
         let line = infos[item.lineIndex]
+        selectedImageLineIndex = item.lineIndex
         let targetLocation = point.x <= item.frame.midX
             ? line.contentRange.location
             : NSMaxRange(line.contentRange)
         textView.window?.makeFirstResponder(textView)
         textView.setSelectedRange(NSRange(location: targetLocation, length: 0))
         refreshEditor()
+    }
+
+    private func synchronizeSelectedImageWithTextSelection() {
+        guard let selectedImageLineIndex else {
+            return
+        }
+
+        let selectedRange = textView.selectedRange()
+        guard selectedRange.length == 0,
+              let line = lineInfo(at: selectedRange.location),
+              line.index == selectedImageLineIndex,
+              imageReference(in: line.text) != nil
+        else {
+            self.selectedImageLineIndex = nil
+            return
+        }
     }
 
     private func resizeImage(_ item: MarkdownImageOverlayItem, from point: NSPoint) -> Bool {
@@ -2599,9 +2717,7 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
                     height: previewSize.height
                 )
                 if imageY > -previewSize.height - 24, imageY < bounds.height + 24 {
-                    let isSelected = selectedRange.length == 0
-                        && selectedRange.location >= line.contentRange.location
-                        && selectedRange.location <= NSMaxRange(line.contentRange)
+                    let isSelected = selectedImageLineIndex == line.index
                     imageItems.append(
                         MarkdownImageOverlayItem(
                             attachmentPath: reference.path,
@@ -4177,14 +4293,14 @@ private final class SlashCommandPaletteView: NSView {
         }
     }
 
-    func resetForOpening() {
-        selectedIndex = 0
+    func resetForOpening(selectedIndex index: Int) {
         for case let button as SlashCommandButton in stackView.arrangedSubviews {
             button.resetPressedState()
         }
         layoutSubtreeIfNeeded()
         scrollTo(y: 0)
-        updateButtonColors()
+        selectedIndex = index
+        scrollSelectedCommandToVisible()
     }
 
     func scrollSelectedCommandToTop() {
@@ -4427,6 +4543,8 @@ private final class SlashCommandLabel: NSTextField {
 
 private final class TodoTextView: NSTextView {
     var copyHandler: (() -> Bool)?
+    var canCopyHandler: (() -> Bool)?
+    var selectAllHandler: (() -> Bool)?
     var cutHandler: (() -> Bool)?
     var pasteHandler: (() -> Bool)?
     var canPasteHandler: (() -> Bool)?
@@ -4463,6 +4581,14 @@ private final class TodoTextView: NSTextView {
         super.copy(sender)
     }
 
+    override func selectAll(_ sender: Any?) {
+        if selectAllHandler?() == true {
+            return
+        }
+
+        super.selectAll(sender)
+    }
+
     override func cut(_ sender: Any?) {
         if cutHandler?() == true {
             return
@@ -4480,6 +4606,11 @@ private final class TodoTextView: NSTextView {
     }
 
     override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        if item.action == #selector(copy(_:)),
+           canCopyHandler?() == true {
+            return true
+        }
+
         if item.action == #selector(paste(_:)),
            canPasteHandler?() == true {
             return true
@@ -4716,17 +4847,25 @@ private final class MarkdownImageOverlayView: NSView {
     }
 }
 
+private struct OCRTextLine: Equatable, Sendable {
+    let text: String
+    let boundingBox: CGRect
+    let characterBoxes: [CGRect]
+}
+
 @MainActor
 private final class MarkdownImageInteractionOverlayView: NSView {
     var onSelectImage: ((MarkdownImageOverlayItem, NSEvent) -> Void)?
     var onResizeImage: ((MarkdownImageOverlayItem, NSEvent) -> Void)?
+    var onCopyImage: ((MarkdownImageOverlayItem) -> Bool)?
 
     private let analyzer = ImageAnalyzer()
     private var analysisCache: [String: ImageAnalysis] = [:]
-    private var textRegionCache: [String: [CGRect]] = [:]
+    private var textLayoutCache: [String: [OCRTextLine]] = [:]
     private var analysisTasks: [String: Task<Void, Never>] = [:]
     private var imageViews: [String: LiveTextImageView] = [:]
     private var items: [MarkdownImageOverlayItem] = []
+    private var contextMenuItem: MarkdownImageOverlayItem?
     private var analysisGeneration = 0
 
     override var isFlipped: Bool {
@@ -4759,7 +4898,7 @@ private final class MarkdownImageInteractionOverlayView: NSView {
             if let analysis = analysisCache[item.attachmentPath] {
                 imageView.setAnalysis(
                     analysis,
-                    textRegions: textRegionCache[item.attachmentPath] ?? []
+                    textLines: textLayoutCache[item.attachmentPath] ?? []
                 )
             } else {
                 analyze(item)
@@ -4774,8 +4913,8 @@ private final class MarkdownImageInteractionOverlayView: NSView {
         analysisTasks.values.forEach { $0.cancel() }
         analysisTasks.removeAll()
         analysisCache.removeAll()
-        textRegionCache.removeAll()
-        imageViews.values.forEach { $0.setAnalysis(nil, textRegions: []) }
+        textLayoutCache.removeAll()
+        imageViews.values.forEach { $0.setAnalysis(nil, textLines: []) }
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
@@ -4793,10 +4932,10 @@ private final class MarkdownImageInteractionOverlayView: NSView {
         case .ocrControl(let control):
             return control
         case .ocrText:
-            if let event = NSApp.currentEvent {
-                imageView.prepareForTextSelection(with: event)
+            if NSApp.currentEvent?.type == .rightMouseDown {
+                return self
             }
-            return imageView.liveTextTarget(at: imagePoint)
+            return self
         case .imageBody:
             return self
         }
@@ -4808,11 +4947,105 @@ private final class MarkdownImageInteractionOverlayView: NSView {
             return
         }
 
-        imageView.resetTextSelection()
         if item.isSelected, item.resizeHandleRect.contains(point) {
             onResizeImage?(item, event)
-        } else {
+            return
+        }
+
+        let imagePoint = imageView.convert(point, from: self)
+        switch imageView.interactionRegion(at: imagePoint) {
+        case .ocrControl:
+            return
+        case .imageBody:
+            imageView.resetTextSelection()
             onSelectImage?(item, event)
+        case .ocrText:
+            trackTextSelection(in: item, imageView: imageView, mouseDownEvent: event)
+        }
+    }
+
+    func selectAllText(in lineIndex: Int) -> Bool {
+        guard let item = items.first(where: { $0.lineIndex == lineIndex }),
+              let imageView = imageViews[viewKey(for: item)]
+        else {
+            return false
+        }
+
+        return imageView.selectAllRecognizedText()
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let point = convert(event.locationInWindow, from: nil)
+        guard let (item, _) = imageTarget(at: point) else {
+            return nil
+        }
+
+        contextMenuItem = item
+        onSelectImage?(item, event)
+
+        let menu = NSMenu()
+        let copyItem = NSMenuItem(
+            title: "Copy Image",
+            action: #selector(copyImageFromContextMenu(_:)),
+            keyEquivalent: "c"
+        )
+        copyItem.keyEquivalentModifierMask = [.command]
+        copyItem.target = self
+        menu.addItem(copyItem)
+        return menu
+    }
+
+    @objc private func copyImageFromContextMenu(_ sender: Any?) {
+        guard let contextMenuItem else {
+            return
+        }
+
+        _ = onCopyImage?(contextMenuItem)
+        self.contextMenuItem = nil
+    }
+
+    private func trackTextSelection(
+        in item: MarkdownImageOverlayItem,
+        imageView: LiveTextImageView,
+        mouseDownEvent: NSEvent
+    ) {
+        let startPoint = imageView.convert(mouseDownEvent.locationInWindow, from: nil)
+        var isDragging = false
+        imageView.resetTextSelection()
+
+        while let nextEvent = window?.nextEvent(
+            matching: [.leftMouseDragged, .leftMouseUp],
+            until: .distantFuture,
+            inMode: .eventTracking,
+            dequeue: true
+        ) {
+            let currentPoint = imageView.convert(nextEvent.locationInWindow, from: nil)
+            let dragDistance = hypot(
+                currentPoint.x - startPoint.x,
+                currentPoint.y - startPoint.y
+            )
+
+            if nextEvent.type == .leftMouseDragged {
+                guard isDragging || dragDistance >= 2 else {
+                    continue
+                }
+
+                if !isDragging {
+                    isDragging = true
+                    imageView.beginTextSelection(at: startPoint)
+                }
+                imageView.updateTextSelection(to: currentPoint)
+                continue
+            }
+
+            if isDragging {
+                imageView.updateTextSelection(to: currentPoint)
+                _ = imageView.window?.makeFirstResponder(imageView)
+            } else {
+                imageView.resetTextSelection()
+                onSelectImage?(item, nextEvent)
+            }
+            return
         }
     }
 
@@ -4847,12 +5080,21 @@ private final class MarkdownImageInteractionOverlayView: NSView {
     override func resetCursorRects() {
         super.resetCursorRects()
 
-        for rect in imageFrameRects() {
-            addCursorRect(rect, cursor: .arrow)
-        }
+        for item in items {
+            addCursorRect(item.frame, cursor: .arrow)
+            guard let imageView = imageViews[viewKey(for: item)] else {
+                continue
+            }
 
-        for rect in resizeHandleRects() {
-            addCursorRect(rect, cursor: .resizeLeftRight)
+            for textRect in imageView.recognizedTextRects() {
+                addCursorRect(convert(textRect, from: imageView), cursor: .iBeam)
+            }
+            if let controlRect = imageView.ocrControlRect() {
+                addCursorRect(convert(controlRect, from: imageView), cursor: .arrow)
+            }
+            if item.isSelected {
+                addCursorRect(item.resizeHandleRect, cursor: .resizeLeftRight)
+            }
         }
     }
 
@@ -4894,7 +5136,7 @@ private final class MarkdownImageInteractionOverlayView: NSView {
                     orientation: .up,
                     configuration: configuration
                 )
-                let textRegions = await Self.recognizedTextRegions(in: cgImage)
+                let textLines = await Self.recognizedTextLines(in: cgImage)
                 let analysis = try await analysisRequest
                 guard !Task.isCancelled else {
                     return
@@ -4904,10 +5146,10 @@ private final class MarkdownImageInteractionOverlayView: NSView {
                     return
                 }
                 analysisCache[attachmentPath] = analysis
-                textRegionCache[attachmentPath] = textRegions
+                textLayoutCache[attachmentPath] = textLines
                 for (key, imageView) in imageViews
                     where key.hasPrefix(attachmentPath + "|") {
-                    imageView.setAnalysis(analysis, textRegions: textRegions)
+                    imageView.setAnalysis(analysis, textLines: textLines)
                 }
             } catch {
                 // An unreadable image remains a normal resizable image.
@@ -4923,9 +5165,9 @@ private final class MarkdownImageInteractionOverlayView: NSView {
         "\(item.attachmentPath)|\(item.lineIndex)"
     }
 
-    nonisolated private static func recognizedTextRegions(
+    nonisolated private static func recognizedTextLines(
         in image: CGImage?
-    ) async -> [CGRect] {
+    ) async -> [OCRTextLine] {
         guard let image else {
             return []
         }
@@ -4940,12 +5182,36 @@ private final class MarkdownImageInteractionOverlayView: NSView {
                 let handler = VNImageRequestHandler(cgImage: image, orientation: .up)
                 try handler.perform([request])
                 return (request.results ?? []).compactMap { observation in
-                    guard observation.topCandidates(1).first != nil else {
+                    guard let candidate = observation.topCandidates(1).first else {
                         return nil
                     }
 
                     let bounds = observation.boundingBox
-                    return bounds.width > 0 && bounds.height > 0 ? bounds : nil
+                    guard bounds.width > 0, bounds.height > 0 else {
+                        return nil
+                    }
+
+                    var characterBoxes: [CGRect] = []
+                    var index = candidate.string.startIndex
+                    while index < candidate.string.endIndex {
+                        let nextIndex = candidate.string.index(after: index)
+                        let characterBox: CGRect
+                        do {
+                            characterBox = try candidate.boundingBox(
+                                for: index..<nextIndex
+                            )?.boundingBox ?? .zero
+                        } catch {
+                            characterBox = .zero
+                        }
+                        characterBoxes.append(characterBox)
+                        index = nextIndex
+                    }
+
+                    return OCRTextLine(
+                        text: candidate.string,
+                        boundingBox: bounds,
+                        characterBoxes: characterBoxes
+                    )
                 }
             } catch {
                 return []
@@ -4960,13 +5226,20 @@ private final class OCRRegionOverlayView: NSView {
         didSet { needsDisplay = true }
     }
 
+    var selectionRects: [NSRect] = [] {
+        didSet {
+            updateVisibility()
+            needsDisplay = true
+        }
+    }
+
     var imageRect: CGRect = .zero {
         didSet { needsDisplay = true }
     }
 
     var showsRegions = false {
         didSet {
-            isHidden = !showsRegions
+            updateVisibility()
             needsDisplay = true
         }
     }
@@ -4979,6 +5252,13 @@ private final class OCRRegionOverlayView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
+
+        for rect in selectionRects {
+            let path = NSBezierPath(roundedRect: rect.insetBy(dx: -0.75, dy: -0.75), xRadius: 1.5, yRadius: 1.5)
+            NSColor.selectedTextBackgroundColor.withAlphaComponent(0.72).setFill()
+            path.fill()
+        }
+
         guard showsRegions, !imageRect.isEmpty else { return }
 
         for region in regions {
@@ -4998,6 +5278,10 @@ private final class OCRRegionOverlayView: NSView {
             path.lineWidth = 1.25
             path.stroke()
         }
+    }
+
+    private func updateVisibility() {
+        isHidden = !showsRegions && selectionRects.isEmpty
     }
 }
 
@@ -5042,11 +5326,16 @@ private final class OCRHighlightButton: NSButton {
 }
 
 @MainActor
-private final class LiveTextImageView: NSView, ImageAnalysisOverlayViewDelegate {
+private final class LiveTextImageView: NSView, ImageAnalysisOverlayViewDelegate, NSUserInterfaceValidations {
     enum InteractionRegion {
         case ocrControl(NSView)
         case ocrText
         case imageBody
+    }
+
+    private struct CharacterCaret {
+        let lineIndex: Int
+        let offset: Int
     }
 
     private let imageView = NSImageView()
@@ -5054,10 +5343,15 @@ private final class LiveTextImageView: NSView, ImageAnalysisOverlayViewDelegate 
     private let regionOverlay = OCRRegionOverlayView()
     private lazy var ocrButton = makeOCRButton()
     private var currentAnalysis: ImageAnalysis?
-    private var recognizedTextRegions: [CGRect] = []
-    private var preparedMouseDownTimestamp: TimeInterval?
+    private var recognizedTextLines: [OCRTextLine] = []
+    private var selectionAnchor: CharacterCaret?
+    private var selectionRange: (lower: CharacterCaret, upper: CharacterCaret)?
 
     override var isFlipped: Bool {
+        true
+    }
+
+    override var acceptsFirstResponder: Bool {
         true
     }
 
@@ -5074,6 +5368,7 @@ private final class LiveTextImageView: NSView, ImageAnalysisOverlayViewDelegate 
     override func layout() {
         super.layout()
         regionOverlay.imageRect = displayedImageRect()
+        updateSelectionOverlay()
     }
 
     func setImage(_ image: NSImage) {
@@ -5082,25 +5377,31 @@ private final class LiveTextImageView: NSView, ImageAnalysisOverlayViewDelegate 
         }
     }
 
-    func setAnalysis(_ analysis: ImageAnalysis?, textRegions: [CGRect]) {
-        if currentAnalysis == nil, analysis == nil, recognizedTextRegions.isEmpty,
-           textRegions.isEmpty {
+    func setAnalysis(_ analysis: ImageAnalysis?, textLines: [OCRTextLine]) {
+        if currentAnalysis == nil, analysis == nil, recognizedTextLines.isEmpty,
+           textLines.isEmpty {
             return
         }
         if let currentAnalysis, let analysis, currentAnalysis === analysis,
-           recognizedTextRegions == textRegions {
+           recognizedTextLines == textLines {
             return
         }
 
         currentAnalysis = analysis
-        recognizedTextRegions = textRegions
-        regionOverlay.regions = textRegions
+        recognizedTextLines = textLines
+        selectionAnchor = nil
+        selectionRange = nil
+        regionOverlay.selectionRects = []
+        regionOverlay.regions = textLines.map(\.boundingBox)
         analysisOverlay.analysis = analysis
         analysisOverlay.preferredInteractionTypes = analysis == nil ? [] : [.textSelection]
         ocrButton.isHidden = analysis == nil
         if analysis == nil {
             ocrButton.state = .off
             regionOverlay.showsRegions = false
+        }
+        if let superview {
+            window?.invalidateCursorRects(for: superview)
         }
     }
 
@@ -5119,11 +5420,6 @@ private final class LiveTextImageView: NSView, ImageAnalysisOverlayViewDelegate 
         return .ocrText
     }
 
-    func liveTextTarget(at point: NSPoint) -> NSView {
-        let overlayPoint = analysisOverlay.convert(point, from: self)
-        return analysisOverlay.hitTest(overlayPoint) ?? analysisOverlay
-    }
-
     func ocrControlTarget(at point: NSPoint) -> NSView? {
         guard !ocrButton.isHidden else {
             return nil
@@ -5133,21 +5429,101 @@ private final class LiveTextImageView: NSView, ImageAnalysisOverlayViewDelegate 
         return ocrButton.bounds.contains(buttonPoint) ? ocrButton : nil
     }
 
+    func recognizedTextRects() -> [NSRect] {
+        recognizedTextLines.map { viewRect(for: $0.boundingBox).insetBy(dx: -2, dy: -2) }
+    }
+
+    func ocrControlRect() -> NSRect? {
+        guard !ocrButton.isHidden else {
+            return nil
+        }
+        return convert(ocrButton.bounds, from: ocrButton)
+    }
+
     func resetTextSelection() {
         if analysisOverlay.hasActiveTextSelection {
             analysisOverlay.resetSelection()
         }
+        selectionAnchor = nil
+        selectionRange = nil
+        regionOverlay.selectionRects = []
     }
 
-    func prepareForTextSelection(with event: NSEvent) {
-        guard event.type == .leftMouseDown,
-              preparedMouseDownTimestamp != event.timestamp
+    func selectAllRecognizedText() -> Bool {
+        guard currentAnalysis != nil,
+              let firstLineIndex = recognizedTextLines.firstIndex(where: { !$0.text.isEmpty }),
+              let lastLineIndex = recognizedTextLines.lastIndex(where: { !$0.text.isEmpty })
+        else {
+            return false
+        }
+
+        selectionAnchor = nil
+        selectionRange = (
+            lower: CharacterCaret(lineIndex: firstLineIndex, offset: 0),
+            upper: CharacterCaret(
+                lineIndex: lastLineIndex,
+                offset: recognizedTextLines[lastLineIndex].text.count
+            )
+        )
+        updateSelectionOverlay()
+        _ = window?.makeFirstResponder(self)
+        return selectedRecognizedText != nil
+    }
+
+    func beginTextSelection(at point: NSPoint) {
+        resetTextSelection()
+        selectionAnchor = characterCaret(at: point)
+    }
+
+    func updateTextSelection(to point: NSPoint) {
+        guard let selectionAnchor,
+              let currentCaret = characterCaret(at: point)
         else {
             return
         }
 
-        preparedMouseDownTimestamp = event.timestamp
-        resetTextSelection()
+        selectionRange = normalizedSelection(from: selectionAnchor, to: currentCaret)
+        updateSelectionOverlay()
+    }
+
+    @objc func copy(_ sender: Any?) {
+        guard let selectedRecognizedText else {
+            return
+        }
+
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(selectedRecognizedText, forType: .string)
+    }
+
+    override func selectAll(_ sender: Any?) {
+        _ = selectAllRecognizedText()
+    }
+
+    override func keyDown(with event: NSEvent) {
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let character = event.charactersIgnoringModifiers?.lowercased()
+        if modifiers.contains(.command), character == "c", selectedRecognizedText != nil {
+            copy(self)
+            return
+        }
+        if modifiers.contains(.command), character == "a" {
+            selectAll(self)
+            return
+        }
+
+        super.keyDown(with: event)
+    }
+
+    func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        if item.action == #selector(copy(_:)) {
+            return selectedRecognizedText != nil
+        }
+        if item.action == #selector(selectAll(_:)) {
+            return !recognizedTextLines.isEmpty
+        }
+
+        return false
     }
 
     func contentsRect(for overlayView: ImageAnalysisOverlayView) -> CGRect {
@@ -5271,16 +5647,232 @@ private final class LiveTextImageView: NSView, ImageAnalysisOverlayViewDelegate 
         }
     }
 
+    private func characterCaret(at point: NSPoint) -> CharacterCaret? {
+        guard !recognizedTextLines.isEmpty else {
+            return nil
+        }
+
+        let lineRects = recognizedTextLines.map { viewRect(for: $0.boundingBox) }
+        guard let lineIndex = lineRects.indices.min(by: {
+            squaredDistance(from: point, to: lineRects[$0])
+                < squaredDistance(from: point, to: lineRects[$1])
+        }) else {
+            return nil
+        }
+
+        let line = recognizedTextLines[lineIndex]
+        let characterCount = line.text.count
+        guard characterCount > 0,
+              let characterRects = characterRects(for: lineIndex)
+        else {
+            return nil
+        }
+
+        guard let characterIndex = characterRects.indices.min(by: {
+            squaredDistance(from: point, to: characterRects[$0])
+                < squaredDistance(from: point, to: characterRects[$1])
+        }) else {
+            return nil
+        }
+
+        let rect = characterRects[characterIndex]
+        let isRightToLeft = characterRects.count > 1
+            && characterRects[0].midX > characterRects[characterRects.count - 1].midX
+        let isAfterMidpoint = isRightToLeft
+            ? point.x < rect.midX
+            : point.x > rect.midX
+        return CharacterCaret(
+            lineIndex: lineIndex,
+            offset: min(characterCount, characterIndex + (isAfterMidpoint ? 1 : 0))
+        )
+    }
+
+    private func characterRects(for lineIndex: Int) -> [NSRect]? {
+        guard recognizedTextLines.indices.contains(lineIndex) else {
+            return nil
+        }
+
+        let line = recognizedTextLines[lineIndex]
+        let characterCount = line.text.count
+        guard characterCount > 0 else {
+            return nil
+        }
+
+        let measuredRects = line.characterBoxes.map(viewRect(for:))
+        let distinctCenters = Set(measuredRects.map { Int(($0.midX * 10).rounded()) })
+        let lineRect = viewRect(for: line.boundingBox)
+        let averageCharacterWidth = lineRect.width / CGFloat(characterCount)
+        let hasCharacterLevelGeometry = measuredRects.count == characterCount
+            && distinctCenters.count >= max(2, characterCount * 3 / 4)
+            && measuredRects.allSatisfy {
+                $0.width > 0 && $0.width <= averageCharacterWidth * 4
+            }
+        if hasCharacterLevelGeometry {
+            return measuredRects
+        }
+
+        let font = NSFont.systemFont(ofSize: max(8, lineRect.height * 0.8))
+        let widthWeights = line.text.map { character in
+            max(
+                0.5,
+                (String(character) as NSString).size(withAttributes: [.font: font]).width
+            )
+        }
+        let totalWeight = widthWeights.reduce(0, +)
+        let isRightToLeft = measuredRects.count > 1
+            && measuredRects[0].midX > measuredRects[measuredRects.count - 1].midX
+        var currentX = isRightToLeft ? lineRect.maxX : lineRect.minX
+        return widthWeights.map { weight in
+            let characterWidth = lineRect.width * weight / totalWeight
+            let rect: NSRect
+            if isRightToLeft {
+                currentX -= characterWidth
+                rect = NSRect(
+                    x: currentX,
+                    y: lineRect.minY,
+                    width: characterWidth,
+                    height: lineRect.height
+                )
+            } else {
+                rect = NSRect(
+                    x: currentX,
+                    y: lineRect.minY,
+                    width: characterWidth,
+                    height: lineRect.height
+                )
+                currentX += characterWidth
+            }
+            return rect
+        }
+    }
+
+    private func normalizedSelection(
+        from start: CharacterCaret,
+        to end: CharacterCaret
+    ) -> (lower: CharacterCaret, upper: CharacterCaret) {
+        var lower = isCaret(start, before: end) ? start : end
+        var upper = isCaret(start, before: end) ? end : start
+
+        if lower.lineIndex == upper.lineIndex, lower.offset == upper.offset {
+            let characterCount = recognizedTextLines[lower.lineIndex].text.count
+            if upper.offset < characterCount {
+                upper = CharacterCaret(lineIndex: upper.lineIndex, offset: upper.offset + 1)
+            } else if lower.offset > 0 {
+                lower = CharacterCaret(lineIndex: lower.lineIndex, offset: lower.offset - 1)
+            }
+        }
+
+        return (lower, upper)
+    }
+
+    private func isCaret(_ lhs: CharacterCaret, before rhs: CharacterCaret) -> Bool {
+        lhs.lineIndex < rhs.lineIndex
+            || (lhs.lineIndex == rhs.lineIndex && lhs.offset <= rhs.offset)
+    }
+
+    private var selectedRecognizedText: String? {
+        guard let selectionRange else {
+            return nil
+        }
+
+        var selectedLines: [String] = []
+        for lineIndex in selectionRange.lower.lineIndex...selectionRange.upper.lineIndex {
+            let line = recognizedTextLines[lineIndex].text
+            let lowerOffset = lineIndex == selectionRange.lower.lineIndex
+                ? min(selectionRange.lower.offset, line.count)
+                : 0
+            let upperOffset = lineIndex == selectionRange.upper.lineIndex
+                ? min(selectionRange.upper.offset, line.count)
+                : line.count
+            guard lowerOffset <= upperOffset else {
+                continue
+            }
+
+            let lowerIndex = line.index(line.startIndex, offsetBy: lowerOffset)
+            let upperIndex = line.index(line.startIndex, offsetBy: upperOffset)
+            selectedLines.append(String(line[lowerIndex..<upperIndex]))
+        }
+
+        let selectedText = selectedLines.joined(separator: "\n")
+        return selectedText.isEmpty ? nil : selectedText
+    }
+
+    private func updateSelectionOverlay() {
+        guard let selectionRange else {
+            regionOverlay.selectionRects = []
+            return
+        }
+
+        var selectionRects: [NSRect] = []
+        for lineIndex in selectionRange.lower.lineIndex...selectionRange.upper.lineIndex {
+            guard let characterRects = characterRects(for: lineIndex) else {
+                continue
+            }
+
+            let lowerOffset = lineIndex == selectionRange.lower.lineIndex
+                ? min(selectionRange.lower.offset, characterRects.count)
+                : 0
+            let upperOffset = lineIndex == selectionRange.upper.lineIndex
+                ? min(selectionRange.upper.offset, characterRects.count)
+                : characterRects.count
+            guard lowerOffset < upperOffset else {
+                continue
+            }
+
+            let selectedRects = characterRects[lowerOffset..<upperOffset]
+            guard var lineRect = selectedRects.first else {
+                continue
+            }
+            for rect in selectedRects.dropFirst() {
+                lineRect = lineRect.union(rect)
+            }
+            selectionRects.append(lineRect)
+        }
+        regionOverlay.selectionRects = selectionRects
+    }
+
+    private func viewRect(for normalizedRect: CGRect) -> NSRect {
+        let contentRect = displayedImageRect()
+        return NSRect(
+            x: contentRect.minX + normalizedRect.minX * contentRect.width,
+            y: contentRect.minY + (1 - normalizedRect.maxY) * contentRect.height,
+            width: normalizedRect.width * contentRect.width,
+            height: normalizedRect.height * contentRect.height
+        )
+    }
+
+    private func squaredDistance(from point: NSPoint, to rect: NSRect) -> CGFloat {
+        let dx: CGFloat
+        if point.x < rect.minX {
+            dx = rect.minX - point.x
+        } else if point.x > rect.maxX {
+            dx = point.x - rect.maxX
+        } else {
+            dx = 0
+        }
+
+        let dy: CGFloat
+        if point.y < rect.minY {
+            dy = rect.minY - point.y
+        } else if point.y > rect.maxY {
+            dy = point.y - rect.maxY
+        } else {
+            dy = 0
+        }
+        return dx * dx + dy * dy
+    }
+
     private func containsRecognizedText(
         at point: NSPoint,
         overlayPoint: NSPoint
     ) -> Bool {
-        if recognizedTextRegions.isEmpty {
+        if recognizedTextLines.isEmpty {
             return analysisOverlay.analysisHasText(at: overlayPoint)
         }
 
         let contentRect = displayedImageRect()
-        return recognizedTextRegions.contains { region in
+        return recognizedTextLines.contains { line in
+            let region = line.boundingBox
             let viewRect = NSRect(
                 x: contentRect.minX + region.minX * contentRect.width,
                 y: contentRect.minY + (1 - region.maxY) * contentRect.height,
