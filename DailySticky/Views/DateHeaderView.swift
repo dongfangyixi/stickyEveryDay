@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct DateHeaderView: View {
@@ -15,13 +16,19 @@ struct DateHeaderView: View {
             .buttonStyle(StickyIconButtonStyle(palette: palette))
             .help("Previous day")
 
-            ViewThatFits(in: .horizontal) {
-                Text(appState.currentDateTitle)
-                Text(appState.currentCompactDateTitle)
+            ZStack {
+                WindowDragArea()
+
+                ViewThatFits(in: .horizontal) {
+                    Text(appState.currentDateTitle)
+                    Text(appState.currentCompactDateTitle)
+                }
+                .allowsHitTesting(false)
             }
             .font(.system(size: 14, weight: .semibold, design: .rounded))
             .lineLimit(1)
             .frame(maxWidth: .infinity, alignment: .center)
+            .frame(height: 28)
 
             if !appState.isShowingToday {
                 Button {
@@ -57,6 +64,20 @@ struct DateHeaderView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+    }
+}
+
+private struct WindowDragArea: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        WindowDragNSView()
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
+private final class WindowDragNSView: NSView {
+    override var mouseDownCanMoveWindow: Bool {
+        true
     }
 }
 
