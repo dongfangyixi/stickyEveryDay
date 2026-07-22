@@ -60,7 +60,7 @@ final class StickyWindowController: NSObject, NSWindowDelegate {
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.titlebarSeparatorStyle = .none
-        window.isMovableByWindowBackground = true
+        window.isMovableByWindowBackground = false
         window.acceptsMouseMovedEvents = true
         window.isReleasedWhenClosed = false
         window.isRestorable = false
