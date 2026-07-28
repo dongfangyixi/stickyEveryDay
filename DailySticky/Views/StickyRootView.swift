@@ -23,5 +23,6 @@ struct StickyRootView: View {
         )
         .background(Color.clear)
         .foregroundStyle(palette.text)
+        .ignoresSafeArea(.container, edges: .top)
     }
 }

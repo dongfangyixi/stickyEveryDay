@@ -23,6 +23,108 @@ private enum TodoLayout {
     }
 }
 
+private enum MarkdownTableCellRenderer {
+    static let horizontalPadding: CGFloat = 8
+    static let verticalPadding: CGFloat = 4
+    static let minimumRowHeight: CGFloat = 24
+
+    static func rowHeight(
+        cells: [String],
+        isHeader: Bool,
+        tableWidth: CGFloat,
+        palette: AppTheme.Palette
+    ) -> CGFloat {
+        let columnCount = max(1, cells.count)
+        let columnWidth = tableWidth / CGFloat(columnCount)
+        let textWidth = max(1, columnWidth - horizontalPadding * 2)
+        let maximumTextHeight = cells.reduce(CGFloat.zero) { height, cell in
+            let text = attributedText(cell, isHeader: isHeader, palette: palette)
+            let bounds = text.boundingRect(
+                with: NSSize(width: textWidth, height: .greatestFiniteMagnitude),
+                options: [.usesLineFragmentOrigin, .usesFontLeading]
+            )
+            return max(height, ceil(bounds.height))
+        }
+
+        return max(minimumRowHeight, maximumTextHeight + verticalPadding * 2)
+    }
+
+    static func attributedText(
+        _ text: String,
+        isHeader: Bool,
+        palette: AppTheme.Palette
+    ) -> NSAttributedString {
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.lineBreakMode = .byCharWrapping
+        paragraphStyle.minimumLineHeight = 15
+
+        let baseFont = NSFont.systemFont(
+            ofSize: 12,
+            weight: isHeader ? .semibold : .regular
+        )
+        let attributed = NSMutableAttributedString(
+            string: text,
+            attributes: [
+                .font: baseFont,
+                .foregroundColor: palette.textNS,
+                .paragraphStyle: paragraphStyle
+            ]
+        )
+
+        for span in MarkdownInlineParser.spans(in: text) {
+            for syntaxRange in span.syntaxRanges where NSMaxRange(syntaxRange) <= attributed.length {
+                attributed.addAttributes(
+                    [
+                        .foregroundColor: NSColor.clear,
+                        .font: NSFont.systemFont(ofSize: 0.01)
+                    ],
+                    range: syntaxRange
+                )
+            }
+
+            guard NSMaxRange(span.contentRange) <= attributed.length else {
+                continue
+            }
+
+            switch span.style {
+            case .heading:
+                attributed.addAttribute(
+                    .font,
+                    value: NSFont.systemFont(ofSize: 12, weight: .bold),
+                    range: span.contentRange
+                )
+            case .bold:
+                attributed.addAttribute(
+                    .font,
+                    value: NSFont.systemFont(ofSize: 12, weight: .bold),
+                    range: span.contentRange
+                )
+            case .italic:
+                let italicFont = NSFontManager.shared.convert(baseFont, toHaveTrait: .italicFontMask)
+                attributed.addAttribute(.font, value: italicFont, range: span.contentRange)
+            case .code:
+                attributed.addAttributes(
+                    [
+                        .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular),
+                        .backgroundColor: palette.codeBackgroundNS
+                    ],
+                    range: span.contentRange
+                )
+            case .strikethrough:
+                attributed.addAttributes(
+                    [
+                        .strikethroughStyle: NSUnderlineStyle.single.rawValue,
+                        .strikethroughColor: palette.textNS
+                    ],
+                    range: span.contentRange
+                )
+            }
+        }
+
+        return attributed
+    }
+}
+
 struct DailyNoteEditorView: View {
     @EnvironmentObject private var appState: AppState
 
@@ -91,7 +193,7 @@ private struct InlineTodoTextEditor: NSViewRepresentable {
     }
 }
 
-private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
+final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     private enum LineKind: Equatable {
         case normal
         case task(indentColumns: Int, isCompleted: Bool)
@@ -363,6 +465,7 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     private var selectedImageLineIndex: Int?
     private var resizingImagePreview: (lineIndex: Int, width: CGFloat)?
     private var lastAppliedImageLayoutWidth: CGFloat?
+    private var lastAppliedTableLayoutWidth: CGFloat?
     private var lineKinds: [LineKind] = [.normal]
     private var isApplyingProgrammaticChange = false
     private var isRestoringUndoSnapshot = false
@@ -437,6 +540,7 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         }
 
         lastAppliedImageLayoutWidth = nil
+        lastAppliedTableLayoutWidth = nil
         clearEditorUndoHistory()
         pendingUndoSnapshot = nil
         let document = Self.displayDocument(from: text)
@@ -629,6 +733,7 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     override func layout() {
         super.layout()
         synchronizeImageLineHeightsIfNeeded()
+        synchronizeTableRowHeightsIfNeeded()
         refreshOverlay()
         if slashCommandContext != nil {
             positionSlashCommandPalette()
@@ -650,6 +755,35 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         }
 
         lastAppliedImageLayoutWidth = usableWidth
+        applyDisplayAttributes()
+
+        if let layoutManager = textView.layoutManager,
+           let textContainer = textView.textContainer {
+            layoutManager.ensureLayout(for: textContainer)
+        }
+    }
+
+    private func synchronizeTableRowHeightsIfNeeded() {
+        guard !isComposingMarkedText else {
+            return
+        }
+
+        let lines = lineInfos()
+        let selection = textView.selectedRange()
+        guard !inactiveMarkdownTableRows(
+            selectedRange: selection,
+            lineInfos: lines
+        ).rows.isEmpty else {
+            lastAppliedTableLayoutWidth = nil
+            return
+        }
+
+        let usableWidth = renderedTableWidth
+        guard lastAppliedTableLayoutWidth.map({ abs($0 - usableWidth) > 0.5 }) ?? true else {
+            return
+        }
+
+        lastAppliedTableLayoutWidth = usableWidth
         applyDisplayAttributes()
 
         if let layoutManager = textView.layoutManager,
@@ -714,8 +848,16 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         textView.canPasteHandler = {
             Self.canPasteImage(from: .general) || NSPasteboard.general.string(forType: .string) != nil
         }
-        textView.checkboxMouseDownHandler = { [weak self] event in
-            self?.handleCheckboxMouseDown(event) ?? false
+        overlayView.onToggleCheckbox = { [weak self] lineIndex in
+            self?.toggleCheckbox(at: lineIndex)
+        }
+        textView.checkboxCursorProvider = { [weak self] point in
+            guard let self else {
+                return nil
+            }
+
+            let overlayPoint = self.overlayView.convert(point, from: self.textView)
+            return self.overlayView.cursor(at: overlayPoint)
         }
         textView.selectionDragDidEndHandler = { [weak self] in
             guard let self else { return }
@@ -2319,22 +2461,68 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         return true
     }
 
-    private func handleCheckboxMouseDown(_ event: NSEvent) -> Bool {
-        let point = overlayView.convert(event.locationInWindow, from: nil)
-        guard let lineIndex = overlayView.lineIndex(at: point) else {
-            return false
-        }
-
+    private func toggleCheckbox(at lineIndex: Int) {
         guard case .task(let indentColumns, let isCompleted) = kind(at: lineIndex) else {
-            return false
+            return
         }
 
         let undoSnapshot = editorSnapshot()
         lineKinds[lineIndex] = .task(indentColumns: indentColumns, isCompleted: !isCompleted)
         notifyTextChangedAndRefresh(scrollSelection: false)
         registerUndoSnapshotIfChanged(from: undoSnapshot)
-        return true
     }
+
+#if DEBUG
+    func checkboxRespondsToClickForTesting(lineIndex: Int) -> Bool {
+        layoutSubtreeIfNeeded()
+        guard let point = overlayView.clickTargetCenter(for: lineIndex) else {
+            return false
+        }
+
+        let pointInContainer = convert(point, from: overlayView)
+        guard hitTest(pointInContainer) === overlayView else {
+            return false
+        }
+
+        return overlayView.performClick(at: point)
+    }
+
+    func checkboxDiagnosticsForTesting(lineIndex: Int) -> String {
+        let point = overlayView.clickTargetCenter(for: lineIndex)
+        let hitView = point.map { hitTest(convert($0, from: overlayView)) }
+        return "container=\(bounds) overlay=\(overlayView.frame) text=\(textView.frame) target=\(String(describing: point)) hit=\(String(describing: hitView))"
+    }
+
+    func checkboxUsesPointingHandCursorForTesting(lineIndex: Int) -> Bool {
+        layoutSubtreeIfNeeded()
+        guard let point = overlayView.clickTargetCenter(for: lineIndex) else {
+            return false
+        }
+
+        return overlayView.cursor(at: point) === NSCursor.pointingHand
+    }
+
+    func visualFragmentCountForTesting(lineIndex: Int) -> Int {
+        guard let layoutManager = textView.layoutManager,
+              let textContainer = textView.textContainer,
+              lineInfos().indices.contains(lineIndex)
+        else {
+            return 0
+        }
+
+        layoutManager.ensureLayout(for: textContainer)
+        let line = lineInfos()[lineIndex]
+        let glyphRange = layoutManager.glyphRange(
+            forCharacterRange: line.contentRange,
+            actualCharacterRange: nil
+        )
+        var count = 0
+        layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) { _, _, _, _, _ in
+            count += 1
+        }
+        return count
+    }
+#endif
 
     private func selectImage(_ item: MarkdownImageOverlayItem, at point: NSPoint) {
         let infos = lineInfos()
@@ -2815,7 +3003,7 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
                             x: max(0, textContainerOrigin.x - visibleBounds.origin.x),
                             y: y - 1,
                             width: max(80, textView.bounds.width - textView.textContainerInset.width * 2),
-                            height: lineHeight() + 1
+                            height: max(lineHeight() + 1, lineRect.height)
                         )
                     )
                 )
@@ -2836,7 +3024,15 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
                             x: max(0, textContainerOrigin.x - visibleBounds.origin.x),
                             y: y - 1,
                             width: max(80, textView.bounds.width - textView.textContainerInset.width * 2),
-                            height: lineHeight() + 1
+                            height: max(
+                                lineRect.height,
+                                MarkdownTableCellRenderer.rowHeight(
+                                    cells: renderedTableRow.cells,
+                                    isHeader: renderedTableRow.isHeader,
+                                    tableWidth: renderedTableWidth,
+                                    palette: palette
+                                )
+                            )
                         )
                     )
                 )
@@ -2853,9 +3049,6 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             textView.convert($0, from: imageInteractionView)
         }
         overlayView.setItems(checkboxItems, markers: markerItems)
-        textView.checkboxCursorRects = overlayView.clickTargetRects().map {
-            textView.convert($0, from: overlayView)
-        }
     }
 
     private func imageCaretItem(edge: ImageCaretEdge, imageFrame: NSRect) -> MarkdownImageCaretItem {
@@ -2979,11 +3172,17 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         for line in displayLineInfos {
             let lineKind = kind(at: line.index)
             let paragraphRange = paragraphAttributeRange(for: line)
+            let displayParagraphStyle: NSParagraphStyle
+            if renderedTables.collapsedLineIndices.contains(line.index) {
+                displayParagraphStyle = collapsedTableSyntaxParagraphStyle()
+            } else if let renderedRow = renderedTables.rows[line.index] {
+                displayParagraphStyle = renderedTableParagraphStyle(for: renderedRow)
+            } else {
+                displayParagraphStyle = paragraphStyle(for: line)
+            }
             textStorage.addAttribute(
                 .paragraphStyle,
-                value: renderedTables.collapsedLineIndices.contains(line.index)
-                    ? collapsedTableSyntaxParagraphStyle()
-                    : paragraphStyle(for: line),
+                value: displayParagraphStyle,
                 range: paragraphRange
             )
 
@@ -3219,6 +3418,24 @@ private final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         style.paragraphSpacing = 0
         style.paragraphSpacingBefore = 0
         return style
+    }
+
+    private func renderedTableParagraphStyle(for row: RenderedMarkdownTableRow) -> NSParagraphStyle {
+        let style = NSMutableParagraphStyle()
+        let height = MarkdownTableCellRenderer.rowHeight(
+            cells: row.cells,
+            isHeader: row.isHeader,
+            tableWidth: renderedTableWidth,
+            palette: palette
+        )
+        style.minimumLineHeight = height
+        style.maximumLineHeight = height
+        style.lineBreakMode = .byClipping
+        return style
+    }
+
+    private var renderedTableWidth: CGFloat {
+        max(80, textView.bounds.width - textView.textContainerInset.width * 2)
     }
 
     private func applyTableTabStops(to style: NSMutableParagraphStyle, columnCount: Int) {
@@ -4548,8 +4765,8 @@ private final class TodoTextView: NSTextView {
     var cutHandler: (() -> Bool)?
     var pasteHandler: (() -> Bool)?
     var canPasteHandler: (() -> Bool)?
-    var checkboxMouseDownHandler: ((NSEvent) -> Bool)?
     var selectionDragDidEndHandler: (() -> Void)?
+    var checkboxCursorProvider: ((NSPoint) -> NSCursor?)?
     var imageCursorProvider: ((NSPoint) -> NSCursor?)?
     var imageCursorRects: [NSRect] = [] {
         didSet {
@@ -4561,17 +4778,12 @@ private final class TodoTextView: NSTextView {
             window?.invalidateCursorRects(for: self)
         }
     }
-    var checkboxCursorRects: [NSRect] = [] {
-        didSet {
-            window?.invalidateCursorRects(for: self)
-        }
-    }
     var slashCommandCursorRects: [NSRect] = [] {
         didSet {
             window?.invalidateCursorRects(for: self)
         }
     }
-    private var checkboxTrackingArea: NSTrackingArea?
+    private var pointerTrackingArea: NSTrackingArea?
 
     override func copy(_ sender: Any?) {
         if copyHandler?() == true {
@@ -4654,14 +4866,6 @@ private final class TodoTextView: NSTextView {
         }
     }
 
-    override func mouseDown(with event: NSEvent) {
-        if checkboxMouseDownHandler?(event) == true {
-            return
-        }
-
-        super.mouseDown(with: event)
-    }
-
     override func mouseUp(with event: NSEvent) {
         super.mouseUp(with: event)
         selectionDragDidEndHandler?()
@@ -4670,8 +4874,8 @@ private final class TodoTextView: NSTextView {
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
 
-        if let checkboxTrackingArea {
-            removeTrackingArea(checkboxTrackingArea)
+        if let pointerTrackingArea {
+            removeTrackingArea(pointerTrackingArea)
         }
 
         let trackingArea = NSTrackingArea(
@@ -4680,7 +4884,7 @@ private final class TodoTextView: NSTextView {
             owner: self
         )
         addTrackingArea(trackingArea)
-        checkboxTrackingArea = trackingArea
+        pointerTrackingArea = trackingArea
     }
 
     override func mouseMoved(with event: NSEvent) {
@@ -4690,13 +4894,13 @@ private final class TodoTextView: NSTextView {
             return
         }
 
-        if let imageCursor = imageCursorProvider?(point) {
-            imageCursor.set()
+        if let checkboxCursor = checkboxCursorProvider?(point) {
+            checkboxCursor.set()
             return
         }
 
-        if checkboxCursorRects.contains(where: { $0.contains(point) }) {
-            NSCursor.pointingHand.set()
+        if let imageCursor = imageCursorProvider?(point) {
+            imageCursor.set()
             return
         }
 
@@ -4707,10 +4911,6 @@ private final class TodoTextView: NSTextView {
         super.resetCursorRects()
 
         for rect in slashCommandCursorRects {
-            addCursorRect(rect, cursor: .pointingHand)
-        }
-
-        for rect in checkboxCursorRects {
             addCursorRect(rect, cursor: .pointingHand)
         }
 
@@ -5912,6 +6112,8 @@ private final class LiveTextImageView: NSView, ImageAnalysisOverlayViewDelegate,
 }
 
 private final class TodoCheckboxOverlayView: NSView {
+    var onToggleCheckbox: ((Int) -> Void)?
+
     var palette: AppTheme.Palette = AppTheme.yellow {
         didSet {
             needsDisplay = true
@@ -5933,13 +6135,28 @@ private final class TodoCheckboxOverlayView: NSView {
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
-        nil
+        let localPoint = convert(point, from: superview)
+        return lineIndex(at: localPoint) == nil ? nil : self
+    }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        _ = performClick(at: point)
     }
 
     override func resetCursorRects() {
+        super.resetCursorRects()
         for item in items {
             addCursorRect(clickTarget(for: item), cursor: .pointingHand)
         }
+    }
+
+    override func cursorUpdate(with event: NSEvent) {
+        NSCursor.pointingHand.set()
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -5958,8 +6175,27 @@ private final class TodoCheckboxOverlayView: NSView {
         items.first { clickTarget(for: $0).contains(point) }?.lineIndex
     }
 
-    func clickTargetRects() -> [NSRect] {
-        items.map { clickTarget(for: $0) }
+    func cursor(at point: NSPoint) -> NSCursor? {
+        lineIndex(at: point) == nil ? nil : .pointingHand
+    }
+
+    @discardableResult
+    func performClick(at point: NSPoint) -> Bool {
+        guard let lineIndex = lineIndex(at: point) else {
+            return false
+        }
+
+        onToggleCheckbox?(lineIndex)
+        return true
+    }
+
+    func clickTargetCenter(for lineIndex: Int) -> NSPoint? {
+        guard let item = items.first(where: { $0.lineIndex == lineIndex }) else {
+            return nil
+        }
+
+        let target = clickTarget(for: item)
+        return NSPoint(x: target.midX, y: target.midY)
     }
 
     private func clickTarget(for item: TodoCheckboxOverlayItem) -> NSRect {
@@ -6102,20 +6338,21 @@ private final class TodoCheckboxOverlayView: NSView {
                 }
             }
 
-            let textAttributes: [NSAttributedString.Key: Any] = [
-                .font: isHeader
-                    ? NSFont.systemFont(ofSize: 12, weight: .semibold)
-                    : NSFont.systemFont(ofSize: 12, weight: .regular),
-                .foregroundColor: palette.textNS
-            ]
             for (index, cell) in cells.enumerated() {
                 let cellRect = NSRect(
-                    x: rowRect.minX + CGFloat(index) * columnWidth + 8,
-                    y: rowRect.minY + max(2, (rowRect.height - 15) / 2),
-                    width: max(0, columnWidth - 16),
-                    height: rowRect.height
+                    x: rowRect.minX + CGFloat(index) * columnWidth + MarkdownTableCellRenderer.horizontalPadding,
+                    y: rowRect.minY + MarkdownTableCellRenderer.verticalPadding,
+                    width: max(0, columnWidth - MarkdownTableCellRenderer.horizontalPadding * 2),
+                    height: max(0, rowRect.height - MarkdownTableCellRenderer.verticalPadding * 2)
                 )
-                (cell as NSString).draw(in: cellRect, withAttributes: textAttributes)
+                MarkdownTableCellRenderer.attributedText(
+                    cell,
+                    isHeader: isHeader,
+                    palette: palette
+                ).draw(
+                    with: cellRect,
+                    options: [.usesLineFragmentOrigin, .usesFontLeading]
+                )
             }
         }
     }
