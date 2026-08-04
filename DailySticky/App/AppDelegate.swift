@@ -5,6 +5,7 @@ import SwiftUI
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private(set) var appState: AppState?
     private var stickyWindowController: StickyWindowController?
+    private var aboutWindowController: NSWindowController?
     private var helpWindowController: NSWindowController?
     private var quickStartWindowController: NSWindowController?
     private var quickStartSettings: QuickStartSettings?
@@ -47,6 +48,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         window.close()
+    }
+
+    func showAbout() {
+        if let aboutWindowController {
+            aboutWindowController.window?.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+
+        guard let appState else {
+            return
+        }
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 300),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "About Pinaday"
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(
+            rootView: PinadayAboutView()
+                .environmentObject(appState)
+        )
+        window.center()
+
+        let controller = NSWindowController(window: window)
+        aboutWindowController = controller
+        controller.showWindow(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     func showHelp() {

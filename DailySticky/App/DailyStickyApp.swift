@@ -29,6 +29,12 @@ struct DailyStickyApp: App {
             .frame(width: 420)
         }
         .commands {
+            CommandGroup(replacing: .appInfo) {
+                Button("About Pinaday") {
+                    appDelegate.showAbout()
+                }
+            }
+
             CommandMenu("File") {
                 Button("Close Window") {
                     appDelegate.closeActiveWindow()
@@ -47,6 +53,96 @@ struct DailyStickyApp: App {
                 .keyboardShortcut("?", modifiers: [.command])
             }
         }
+    }
+}
+
+struct PinadayAboutView: View {
+    @EnvironmentObject private var appState: AppState
+
+    private let feedbackEmail = "xuluthebest@gmail.com"
+
+    var body: some View {
+        let palette = appState.themePalette
+
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(spacing: 16) {
+                Image(nsImage: NSApp.applicationIconImage)
+                    .resizable()
+                    .interpolation(.high)
+                    .frame(width: 72, height: 72)
+                    .accessibilityHidden(true)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Pinaday")
+                        .font(.system(size: 26, weight: .semibold, design: .rounded))
+                    Text("A daily Markdown sticky note.")
+                        .font(.system(size: 13))
+                        .foregroundStyle(palette.secondaryText)
+                    Text(versionText)
+                        .font(.system(size: 11, design: .rounded))
+                        .foregroundStyle(palette.secondaryText)
+                }
+            }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 8) {
+                Label("Feedback", systemImage: "envelope")
+                    .font(.system(size: 14, weight: .semibold))
+
+                Text("Found an issue or have an idea? Send a note directly to the developer.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(palette.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                HStack(spacing: 10) {
+                    Button {
+                        sendFeedback()
+                    } label: {
+                        Label("Send Feedback", systemImage: "paperplane.fill")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(palette.accent)
+
+                    Text(feedbackEmail)
+                        .font(.system(size: 12))
+                        .foregroundStyle(palette.secondaryText)
+                        .textSelection(.enabled)
+                }
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(24)
+        .frame(width: 420, height: 300, alignment: .topLeading)
+        .background(palette.paper)
+        .foregroundStyle(palette.text)
+    }
+
+    private var versionText: String {
+        let version = Bundle.main.object(
+            forInfoDictionaryKey: "CFBundleShortVersionString"
+        ) as? String ?? "1.0"
+        let build = Bundle.main.object(
+            forInfoDictionaryKey: "CFBundleVersion"
+        ) as? String ?? ""
+
+        return build.isEmpty ? "Version \(version)" : "Version \(version) (\(build))"
+    }
+
+    private func sendFeedback() {
+        var components = URLComponents()
+        components.scheme = "mailto"
+        components.path = feedbackEmail
+        components.queryItems = [
+            URLQueryItem(name: "subject", value: "Pinaday Feedback")
+        ]
+
+        guard let url = components.url else {
+            return
+        }
+
+        NSWorkspace.shared.open(url)
     }
 }
 

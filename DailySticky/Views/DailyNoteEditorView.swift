@@ -252,9 +252,149 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         }
     }
 
-    private struct DisplayDocument {
+    private struct StructuredDocument {
+        private struct LineSpan {
+            var lineRange: NSRange
+            var contentRange: NSRange
+        }
+
         var text: String
         var lineKinds: [LineKind]
+
+        init(text: String, lineKinds: [LineKind]) {
+            assert(
+                lineKinds.count == Self.lineCount(in: text),
+                "Structured document requires exactly one kind per logical line"
+            )
+            self.text = text
+            self.lineKinds = Self.normalizedKinds(lineKinds, for: text)
+        }
+
+        func replacingCharacters(
+            in range: NSRange,
+            with replacement: StructuredDocument
+        ) -> StructuredDocument? {
+            let nsText = text as NSString
+            guard range.location >= 0,
+                  NSMaxRange(range) <= nsText.length
+            else {
+                assertionFailure("Structured document edit range is outside the document")
+                return nil
+            }
+
+            let spans = Self.lineSpans(in: text)
+            guard let startLineIndex = Self.lineIndex(containing: range.location, in: spans),
+                  let endLineIndex = Self.lineIndex(containing: NSMaxRange(range), in: spans),
+                  lineKinds.indices.contains(startLineIndex),
+                  lineKinds.indices.contains(endLineIndex)
+            else {
+                assertionFailure("Structured document line metadata is not aligned")
+                return nil
+            }
+
+            var replacementKinds = Self.normalizedKinds(
+                replacement.lineKinds,
+                for: replacement.text
+            )
+            let startsAtLineStart = range.location == spans[startLineIndex].contentRange.location
+
+            if replacementKinds.count == 1 {
+                if !startsAtLineStart {
+                    replacementKinds[0] = lineKinds[startLineIndex]
+                }
+            } else {
+                if !startsAtLineStart || replacement.text.hasPrefix("\n") {
+                    replacementKinds[0] = lineKinds[startLineIndex]
+                }
+                if replacement.text.hasSuffix("\n") {
+                    replacementKinds[replacementKinds.count - 1] = lineKinds[endLineIndex]
+                }
+            }
+
+            let updatedText = nsText.replacingCharacters(in: range, with: replacement.text)
+            let updatedKinds = Array(lineKinds[..<startLineIndex])
+                + replacementKinds
+                + Array(lineKinds[(endLineIndex + 1)...])
+
+            guard updatedKinds.count == Self.lineCount(in: updatedText) else {
+                assertionFailure("Structured document edit produced misaligned line metadata")
+                return nil
+            }
+
+            return StructuredDocument(text: updatedText, lineKinds: updatedKinds)
+        }
+
+        static func normalizedKinds(_ kinds: [LineKind], for text: String) -> [LineKind] {
+            let count = lineCount(in: text)
+            var result = kinds
+            if result.count < count {
+                result.append(contentsOf: Array(repeating: .normal, count: count - result.count))
+            } else if result.count > count {
+                result.removeLast(result.count - count)
+            }
+
+            return result.isEmpty ? [.normal] : result
+        }
+
+        private static func lineCount(in text: String) -> Int {
+            text.reduce(into: 1) { count, character in
+                if character == "\n" {
+                    count += 1
+                }
+            }
+        }
+
+        private static func lineSpans(in text: String) -> [LineSpan] {
+            let nsText = text as NSString
+            var spans: [LineSpan] = []
+            var lineStart = 0
+
+            for location in 0..<nsText.length
+                where nsText.character(at: location) == 10 {
+                spans.append(
+                    LineSpan(
+                        lineRange: NSRange(
+                            location: lineStart,
+                            length: location - lineStart + 1
+                        ),
+                        contentRange: NSRange(
+                            location: lineStart,
+                            length: location - lineStart
+                        )
+                    )
+                )
+                lineStart = location + 1
+            }
+
+            spans.append(
+                LineSpan(
+                    lineRange: NSRange(
+                        location: lineStart,
+                        length: nsText.length - lineStart
+                    ),
+                    contentRange: NSRange(
+                        location: lineStart,
+                        length: nsText.length - lineStart
+                    )
+                )
+            )
+            return spans
+        }
+
+        private static func lineIndex(
+            containing location: Int,
+            in spans: [LineSpan]
+        ) -> Int? {
+            for (index, span) in spans.enumerated() {
+                let contentEnd = NSMaxRange(span.contentRange)
+                let lineEnd = NSMaxRange(span.lineRange)
+                if location <= contentEnd || location < lineEnd {
+                    return index
+                }
+            }
+
+            return spans.indices.last
+        }
     }
 
     private struct DisplayLineInfo {
@@ -622,7 +762,10 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         isRefreshingSelectionDisplay = true
         snapSelectionAroundImageIfNeeded()
         synchronizeSelectedImageWithTextSelection()
-        if NSApp.currentEvent?.type != .leftMouseDragged {
+        // NSTextView calculates the caret against the current glyph layout while
+        // mouse selection is in progress. Rebuilding paragraph attributes here
+        // invalidates those coordinates, most noticeably on indented list lines.
+        if shouldApplyDisplayAttributesForSelectionChange {
             applyDisplayAttributes()
         }
         refreshOverlay()
@@ -630,6 +773,10 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             hideSlashCommandPalette()
         }
         isRefreshingSelectionDisplay = false
+    }
+
+    private var shouldApplyDisplayAttributesForSelectionChange: Bool {
+        !textView.isTrackingTextSelection
     }
 
     func textView(
@@ -2143,20 +2290,12 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         let replacement = imageMarkdownReplacement(line, in: nsText, selectedRange: selectedRange)
         let document = Self.displayDocument(from: replacement)
         let replacementLength = (document.text as NSString).length
-        let replacesWholeDocument = isFullTextRange(selectedRange)
-            || (nsText.length == 0 && selectedRange.length == 0)
 
-        return applyTextStorageEdit(
+        return applyStructuredDocumentEdit(
             range: selectedRange,
-            replacement: document.text,
+            replacement: document,
             selectedRange: NSRange(location: selectedRange.location + replacementLength, length: 0)
-        ) {
-            if replacesWholeDocument {
-                lineKinds = document.lineKinds
-            } else {
-                replaceLineKindsForPaste(in: selectedRange, with: document.lineKinds)
-            }
-        }
+        )
     }
 
     private func imageMarkdownReplacement(
@@ -2184,23 +2323,19 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             return false
         }
 
+        return pasteMarkdownTasks(pastedText)
+    }
+
+    private func pasteMarkdownTasks(_ pastedText: String) -> Bool {
         let selectedRange = textView.selectedRange()
         let document = Self.displayDocument(from: pastedText)
         let replacementLength = (document.text as NSString).length
-        let replacesWholeDocument = isFullTextRange(selectedRange)
-            || ((textView.string as NSString).length == 0 && selectedRange.length == 0)
 
-        return applyTextStorageEdit(
+        return applyStructuredDocumentEdit(
             range: selectedRange,
-            replacement: document.text,
+            replacement: document,
             selectedRange: NSRange(location: selectedRange.location + replacementLength, length: 0)
-        ) {
-            if replacesWholeDocument {
-                lineKinds = document.lineKinds
-            } else {
-                replaceLineKindsForPaste(in: selectedRange, with: document.lineKinds)
-            }
-        }
+        )
     }
 
     private func promoteTypedMarkdownTaskIfNeeded() -> Bool {
@@ -2461,6 +2596,36 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         return true
     }
 
+    private func applyStructuredDocumentEdit(
+        range: NSRange,
+        replacement: StructuredDocument,
+        selectedRange: NSRange
+    ) -> Bool {
+        let currentDocument = StructuredDocument(
+            text: textView.string,
+            lineKinds: lineKinds
+        )
+        guard let updatedDocument = currentDocument.replacingCharacters(
+            in: range,
+            with: replacement
+        ) else {
+            NSSound.beep()
+            return true
+        }
+
+        return applyTextStorageEdit(
+            range: range,
+            replacement: replacement.text,
+            selectedRange: selectedRange
+        ) {
+            lineKinds = updatedDocument.lineKinds
+            assert(
+                textView.string == updatedDocument.text,
+                "Text storage and structured document diverged during edit"
+            )
+        }
+    }
+
     private func toggleCheckbox(at lineIndex: Int) {
         guard case .task(let indentColumns, let isCompleted) = kind(at: lineIndex) else {
             return
@@ -2473,6 +2638,44 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     }
 
 #if DEBUG
+    func typeTextForTesting(_ text: String) {
+        textView.insertText(text, replacementRange: textView.selectedRange())
+    }
+
+    @discardableResult
+    func typeTextForTesting(_ text: String, atLine lineIndex: Int, utf16Offset: Int) -> Bool {
+        let infos = lineInfos()
+        guard infos.indices.contains(lineIndex) else {
+            return false
+        }
+
+        let line = infos[lineIndex]
+        let boundedOffset = max(0, min(utf16Offset, line.contentRange.length))
+        textView.setSelectedRange(
+            NSRange(location: line.contentRange.location + boundedOffset, length: 0)
+        )
+        textView.insertText(text, replacementRange: textView.selectedRange())
+        return true
+    }
+
+    func pressReturnForTesting() {
+        if !self.textView(textView, doCommandBy: #selector(NSResponder.insertNewline(_:))) {
+            textView.insertText("\n", replacementRange: textView.selectedRange())
+        }
+    }
+
+    func pasteMarkdownForTesting(_ markdown: String, atLine lineIndex: Int) -> Bool {
+        let infos = lineInfos()
+        guard infos.indices.contains(lineIndex) else {
+            return false
+        }
+
+        textView.setSelectedRange(
+            NSRange(location: infos[lineIndex].contentRange.location, length: 0)
+        )
+        return pasteMarkdownTasks(markdown)
+    }
+
     func checkboxRespondsToClickForTesting(lineIndex: Int) -> Bool {
         layoutSubtreeIfNeeded()
         guard let point = overlayView.clickTargetCenter(for: lineIndex) else {
@@ -2521,6 +2724,82 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             count += 1
         }
         return count
+    }
+
+    func caretLocationForTesting(lineIndex: Int, utf16Offset: Int) -> Int? {
+        guard let layoutManager = textView.layoutManager,
+              let textContainer = textView.textContainer,
+              lineInfos().indices.contains(lineIndex)
+        else {
+            return nil
+        }
+
+        layoutSubtreeIfNeeded()
+        layoutManager.ensureLayout(for: textContainer)
+        let line = lineInfos()[lineIndex]
+        let boundedOffset = max(0, min(utf16Offset, line.contentRange.length))
+        let targetLocation = line.contentRange.location + boundedOffset
+        let point: NSPoint
+
+        if targetLocation < NSMaxRange(line.contentRange) {
+            let glyphRange = layoutManager.glyphRange(
+                forCharacterRange: NSRange(location: targetLocation, length: 1),
+                actualCharacterRange: nil
+            )
+            guard glyphRange.length > 0 else {
+                return nil
+            }
+
+            let glyphRect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+            point = NSPoint(
+                x: textView.textContainerOrigin.x + glyphRect.minX + 1,
+                y: textView.textContainerOrigin.y + glyphRect.midY
+            )
+        } else {
+            guard let lineRect = lineFragmentRect(for: line, layoutManager: layoutManager) else {
+                return nil
+            }
+            let trailingX: CGFloat
+            if line.contentRange.length > 0 {
+                let trailingGlyphRange = layoutManager.glyphRange(
+                    forCharacterRange: NSRange(
+                        location: NSMaxRange(line.contentRange) - 1,
+                        length: 1
+                    ),
+                    actualCharacterRange: nil
+                )
+                trailingX = layoutManager.boundingRect(
+                    forGlyphRange: trailingGlyphRange,
+                    in: textContainer
+                ).maxX + 1
+            } else {
+                trailingX = lineRect.minX
+            }
+            point = NSPoint(
+                x: textView.textContainerOrigin.x + max(lineRect.minX, trailingX),
+                y: textView.textContainerOrigin.y + lineRect.midY
+            )
+        }
+
+        return textView.characterIndexForInsertion(at: point)
+    }
+
+    func selectionDisplayRefreshIsDeferredDuringMouseTrackingForTesting() -> Bool {
+        textView.isTrackingTextSelectionForTesting = true
+        defer { textView.isTrackingTextSelectionForTesting = false }
+        return !shouldApplyDisplayAttributesForSelectionChange
+    }
+
+    func imagePreviewSizeForTesting(
+        imageSize: NSSize,
+        availableWidth: CGFloat,
+        explicitWidth: CGFloat?
+    ) -> NSSize {
+        Self.constrainedImagePreviewSize(
+            imageSize: imageSize,
+            maxWidth: availableWidth,
+            explicitWidth: explicitWidth
+        )
     }
 #endif
 
@@ -2803,34 +3082,6 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         }
 
         return .normal
-    }
-
-    private func replaceLineKindsForPaste(in selectedRange: NSRange, with replacementKinds: [LineKind]) {
-        let textLength = (textView.string as NSString).length
-        lineKinds = normalizedLineKinds(lineKinds, for: textView.string)
-
-        guard !replacementKinds.isEmpty else {
-            return
-        }
-
-        if textLength == 0 {
-            lineKinds = replacementKinds
-            return
-        }
-
-        let startLine = lineInfo(at: selectedRange.location)?.index ?? 0
-        let removedLineCount: Int
-        if selectedRange.length == 0 {
-            removedLineCount = 0
-        } else {
-            let endLocation = max(selectedRange.location, NSMaxRange(selectedRange) - 1)
-            let endLine = lineInfo(at: endLocation)?.index ?? startLine
-            removedLineCount = max(1, endLine - startLine + 1)
-        }
-
-        let safeStart = min(startLine, lineKinds.count)
-        let safeEnd = min(lineKinds.count, safeStart + removedLineCount)
-        lineKinds.replaceSubrange(safeStart..<safeEnd, with: replacementKinds)
     }
 
     private func refreshOverlay() {
@@ -3630,21 +3881,38 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         lineIndex: Int
     ) -> NSSize {
         let maxWidth = max(120, textView.bounds.width - textView.textContainerInset.width * 2)
-        let maxHeight: CGFloat = 360
-        let imageSize = image.size
+        let explicitWidth = resizingImagePreview?.lineIndex == lineIndex
+            ? resizingImagePreview?.width
+            : reference.width
+        return Self.constrainedImagePreviewSize(
+            imageSize: image.size,
+            maxWidth: maxWidth,
+            explicitWidth: explicitWidth
+        )
+    }
+
+    private static func constrainedImagePreviewSize(
+        imageSize: NSSize,
+        maxWidth: CGFloat,
+        explicitWidth: CGFloat?
+    ) -> NSSize {
         guard imageSize.width > 0, imageSize.height > 0 else {
             return NSSize(width: maxWidth, height: 180)
         }
 
-        let explicitWidth = resizingImagePreview?.lineIndex == lineIndex
-            ? resizingImagePreview?.width
-            : reference.width
-        let targetWidth = explicitWidth.map { max(80, min($0, maxWidth)) }
-        let scale = min(
-            (targetWidth ?? imageSize.width) / imageSize.width,
-            maxWidth / imageSize.width,
-            maxHeight / imageSize.height
-        )
+        let scale: CGFloat
+        if let explicitWidth {
+            let targetWidth = max(80, min(explicitWidth, maxWidth))
+            scale = targetWidth / imageSize.width
+        } else {
+            let automaticMaximumHeight: CGFloat = 360
+            scale = min(
+                1,
+                maxWidth / imageSize.width,
+                automaticMaximumHeight / imageSize.height
+            )
+        }
+
         return NSSize(
             width: floor(imageSize.width * scale),
             height: floor(imageSize.height * scale)
@@ -3755,19 +4023,7 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     }
 
     private func normalizedLineKinds(_ kinds: [LineKind], for text: String) -> [LineKind] {
-        let lineCount = text.components(separatedBy: "\n").count
-        var result = kinds
-        if result.count < lineCount {
-            result.append(contentsOf: Array(repeating: .normal, count: lineCount - result.count))
-        } else if result.count > lineCount {
-            result.removeLast(result.count - lineCount)
-        }
-
-        if result.isEmpty {
-            return [.normal]
-        }
-
-        return result
+        StructuredDocument.normalizedKinds(kinds, for: text)
     }
 
     private func displayLines() -> [String] {
@@ -3966,7 +4222,7 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         return markdownLines.joined(separator: "\n")
     }
 
-    private static func displayDocument(from markdownText: String) -> DisplayDocument {
+    private static func displayDocument(from markdownText: String) -> StructuredDocument {
         let lines = markdownText.components(separatedBy: "\n")
         var displayLines: [String] = []
         var lineKinds: [LineKind] = []
@@ -4062,7 +4318,7 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             lineKinds = [.normal]
         }
 
-        return DisplayDocument(
+        return StructuredDocument(
             text: displayLines.joined(separator: "\n"),
             lineKinds: lineKinds
         )
@@ -4784,6 +5040,15 @@ private final class TodoTextView: NSTextView {
         }
     }
     private var pointerTrackingArea: NSTrackingArea?
+    private(set) var isTrackingTextSelection = false
+
+#if DEBUG
+    var isTrackingTextSelectionForTesting = false {
+        didSet {
+            isTrackingTextSelection = isTrackingTextSelectionForTesting
+        }
+    }
+#endif
 
     override func copy(_ sender: Any?) {
         if copyHandler?() == true {
@@ -4866,9 +5131,13 @@ private final class TodoTextView: NSTextView {
         }
     }
 
-    override func mouseUp(with event: NSEvent) {
-        super.mouseUp(with: event)
-        selectionDragDidEndHandler?()
+    override func mouseDown(with event: NSEvent) {
+        isTrackingTextSelection = true
+        defer {
+            isTrackingTextSelection = false
+            selectionDragDidEndHandler?()
+        }
+        super.mouseDown(with: event)
     }
 
     override func updateTrackingAreas() {
@@ -5094,6 +5363,7 @@ private final class MarkdownImageInteractionOverlayView: NSView {
 
             imageView.frame = item.frame
             imageView.setImage(item.image)
+            imageView.setImageSelected(item.isSelected)
 
             if let analysis = analysisCache[item.attachmentPath] {
                 imageView.setAnalysis(
@@ -5544,6 +5814,7 @@ private final class LiveTextImageView: NSView, ImageAnalysisOverlayViewDelegate,
     private lazy var ocrButton = makeOCRButton()
     private var currentAnalysis: ImageAnalysis?
     private var recognizedTextLines: [OCRTextLine] = []
+    private var isImageSelected = false
     private var selectionAnchor: CharacterCaret?
     private var selectionRange: (lower: CharacterCaret, upper: CharacterCaret)?
 
@@ -5577,6 +5848,18 @@ private final class LiveTextImageView: NSView, ImageAnalysisOverlayViewDelegate,
         }
     }
 
+    func setImageSelected(_ isSelected: Bool) {
+        guard isImageSelected != isSelected else {
+            return
+        }
+
+        isImageSelected = isSelected
+        updateOCRButtonVisibility()
+        if let superview {
+            window?.invalidateCursorRects(for: superview)
+        }
+    }
+
     func setAnalysis(_ analysis: ImageAnalysis?, textLines: [OCRTextLine]) {
         if currentAnalysis == nil, analysis == nil, recognizedTextLines.isEmpty,
            textLines.isEmpty {
@@ -5595,7 +5878,7 @@ private final class LiveTextImageView: NSView, ImageAnalysisOverlayViewDelegate,
         regionOverlay.regions = textLines.map(\.boundingBox)
         analysisOverlay.analysis = analysis
         analysisOverlay.preferredInteractionTypes = analysis == nil ? [] : [.textSelection]
-        ocrButton.isHidden = analysis == nil
+        updateOCRButtonVisibility()
         if analysis == nil {
             ocrButton.state = .off
             regionOverlay.showsRegions = false
@@ -5816,6 +6099,10 @@ private final class LiveTextImageView: NSView, ImageAnalysisOverlayViewDelegate,
         button.toolTip = "Show recognized text"
         updateOCRButtonAppearance(button)
         return button
+    }
+
+    private func updateOCRButtonVisibility() {
+        ocrButton.isHidden = currentAnalysis == nil || !isImageSelected
     }
 
     @objc private func toggleOCRHighlights(_ sender: NSButton) {
