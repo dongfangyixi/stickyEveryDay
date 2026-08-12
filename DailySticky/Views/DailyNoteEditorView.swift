@@ -400,8 +400,69 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     private struct DisplayLineInfo {
         var index: Int
         var lineRange: NSRange
+        var prefixRange: NSRange?
         var contentRange: NSRange
         var text: String
+    }
+
+    private enum NumberedListMarkerFormatter {
+        static func marker(number: Int, indentColumns: Int) -> String {
+            marker(
+                number: number,
+                level: max(
+                    0,
+                    indentColumns / Int(TodoLayout.markdownIndentColumnsPerLevel)
+                )
+            )
+        }
+
+        static func marker(number: Int, level: Int) -> String {
+            let safeNumber = max(1, number)
+            switch level % 3 {
+            case 1:
+                return "\(alphabeticNumber(safeNumber))."
+            case 2:
+                return "\(romanNumber(safeNumber))."
+            default:
+                return "\(safeNumber)."
+            }
+        }
+
+        static func presentationPrefix(number: Int, indentColumns: Int) -> String {
+            marker(number: number, indentColumns: indentColumns) + " "
+        }
+
+        private static func alphabeticNumber(_ number: Int) -> String {
+            var value = number
+            var scalars: [UnicodeScalar] = []
+
+            while value > 0 {
+                value -= 1
+                scalars.append(UnicodeScalar(97 + value % 26)!)
+                value /= 26
+            }
+
+            return String(String.UnicodeScalarView(scalars.reversed()))
+        }
+
+        private static func romanNumber(_ number: Int) -> String {
+            let numerals: [(value: Int, symbol: String)] = [
+                (1000, "m"), (900, "cm"), (500, "d"), (400, "cd"),
+                (100, "c"), (90, "xc"), (50, "l"), (40, "xl"),
+                (10, "x"), (9, "ix"), (5, "v"), (4, "iv"), (1, "i")
+            ]
+            var remainder = number
+            var result = ""
+
+            for numeral in numerals {
+                while remainder >= numeral.value {
+                    result += numeral.symbol
+                    remainder -= numeral.value
+                }
+            }
+
+            return result
+        }
     }
 
     private struct MarkdownImageReference {
@@ -599,6 +660,9 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     private let imageOverlayView = MarkdownImageOverlayView()
     private let slashPaletteView = SlashCommandPaletteView()
     private let baseFont = NSFont.systemFont(ofSize: 14)
+    private static let numberedListPrefixAttribute = NSAttributedString.Key(
+        "PinadayNumberedListPrefix"
+    )
     private var palette: AppTheme.Palette
     private var dateKey: String
     private var imageCache: [String: NSImage] = [:]
@@ -1331,7 +1395,8 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         let selectedRange = textView.selectedRange()
         guard selectedRange.length == 0,
               selectedRange.location > 0,
-              let line = lineInfo(at: selectedRange.location)
+              let line = lineInfo(at: selectedRange.location),
+              selectedRange.location >= line.contentRange.location
         else {
             return nil
         }
@@ -1751,20 +1816,28 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             return true
         }
 
-        let updatedText = updatedLines.joined(separator: "\n")
-        let sortedTextEdits = textEdits.sorted { $0.range.location < $1.range.location }
-        let updatedSelectionStart = mappedLocation(
-            selectedRange.location,
-            through: sortedTextEdits
-        )
-        let updatedSelectionEnd = mappedLocation(
-            NSMaxRange(selectedRange),
-            through: sortedTextEdits
-        )
-        let updatedSelectedRange = NSRange(
-            location: updatedSelectionStart,
-            length: max(0, updatedSelectionEnd - updatedSelectionStart)
-        )
+        for lineIndex in selectedLineRange {
+            guard infos.indices.contains(lineIndex),
+                  updatedKinds.indices.contains(lineIndex),
+                  case .numbered(let indentColumns, let number) = updatedKinds[lineIndex]
+            else {
+                continue
+            }
+
+            textEdits.append((
+                range: infos[lineIndex].prefixRange
+                    ?? NSRange(location: infos[lineIndex].lineRange.location, length: 0),
+                insertedLength: (
+                    NumberedListMarkerFormatter.presentationPrefix(
+                        number: number,
+                        indentColumns: indentColumns
+                    ) as NSString
+                ).length
+            ))
+        }
+
+        let updatedText = presentationText(lines: updatedLines, lineKinds: updatedKinds)
+        let updatedSelectedRange = mappedSelection(selectedRange, through: textEdits)
         let fullRange = NSRange(location: 0, length: (textView.string as NSString).length)
 
         return applyTextStorageEdit(
@@ -1775,37 +1848,6 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             lineKinds = updatedKinds
             renumberNumberedLists()
         }
-    }
-
-    private func mappedLocation(
-        _ originalLocation: Int,
-        through edits: [(range: NSRange, insertedLength: Int)]
-    ) -> Int {
-        var offset = 0
-
-        for edit in edits {
-            let editStart = edit.range.location
-            let editEnd = NSMaxRange(edit.range)
-
-            if edit.range.length == 0 {
-                if originalLocation >= editStart {
-                    offset += edit.insertedLength
-                }
-                continue
-            }
-
-            if originalLocation <= editStart {
-                break
-            }
-
-            if originalLocation < editEnd {
-                return editStart + offset + edit.insertedLength
-            }
-
-            offset += edit.insertedLength - edit.range.length
-        }
-
-        return originalLocation + offset
     }
 
     private func renumberNumberedLists() {
@@ -1842,6 +1884,179 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
                 isInsideNumberedBlock = false
             }
         }
+    }
+
+    private func synchronizeNumberedListPrefixes() {
+        guard let textStorage = textView.textStorage else {
+            return
+        }
+
+        let originalText = textView.string
+        let nsOriginalText = originalText as NSString
+        let infos = lineInfos(for: originalText, lineKinds: lineKinds)
+        var edits: [(range: NSRange, replacement: String)] = []
+
+        for line in infos {
+            let rawLineRange = rawTextRange(for: line, in: nsOriginalText)
+            let rawLine = nsOriginalText.substring(with: rawLineRange)
+            let attributedPrefixRange = attributedNumberedPrefixRange(
+                in: rawLineRange,
+                textStorage: textStorage
+            )
+
+            guard case .numbered(let indentColumns, let number) = kind(at: line.index) else {
+                if let orphanedPrefixRange = line.prefixRange
+                    ?? attributedPrefixRange
+                    ?? generatedNumberedPrefixRange(
+                        in: rawLine,
+                        lineLocation: line.lineRange.location
+                    ) {
+                    edits.append((range: orphanedPrefixRange, replacement: ""))
+                }
+                continue
+            }
+
+            let expectedPrefix = NumberedListMarkerFormatter.presentationPrefix(
+                number: number,
+                indentColumns: indentColumns
+            )
+            let replacementRange = line.prefixRange
+                ?? attributedPrefixRange
+                ?? NSRange(location: line.lineRange.location, length: 0)
+            let currentPrefix = replacementRange.length > 0
+                ? (originalText as NSString).substring(with: replacementRange)
+                : ""
+
+            if currentPrefix != expectedPrefix {
+                edits.append((range: replacementRange, replacement: expectedPrefix))
+            }
+        }
+
+        guard !edits.isEmpty else {
+            return
+        }
+
+        let originalSelection = textView.selectedRange()
+        let mappedSelection = mappedSelection(
+            originalSelection,
+            through: edits.map {
+                (range: $0.range, insertedLength: ($0.replacement as NSString).length)
+            }
+        )
+        let wasApplyingProgrammaticChange = isApplyingProgrammaticChange
+        isApplyingProgrammaticChange = true
+        textStorage.beginEditing()
+        for edit in edits.sorted(by: { $0.range.location > $1.range.location }) {
+            textStorage.replaceCharacters(in: edit.range, with: edit.replacement)
+        }
+        textStorage.endEditing()
+        textView.setSelectedRange(mappedSelection)
+        isApplyingProgrammaticChange = wasApplyingProgrammaticChange
+    }
+
+    private func rawTextRange(for line: DisplayLineInfo, in text: NSString) -> NSRange {
+        let start = max(0, min(line.lineRange.location, text.length))
+        let end = max(start, min(NSMaxRange(line.lineRange), text.length))
+        let endsWithNewline = end > start && text.character(at: end - 1) == 10
+        return NSRange(
+            location: start,
+            length: end - start - (endsWithNewline ? 1 : 0)
+        )
+    }
+
+    private func attributedNumberedPrefixRange(
+        in lineRange: NSRange,
+        textStorage: NSTextStorage
+    ) -> NSRange? {
+        let start = lineRange.location
+        let end = min(NSMaxRange(lineRange), textStorage.length)
+        guard start >= 0,
+              start < end,
+              textStorage.attribute(
+                  Self.numberedListPrefixAttribute,
+                  at: start,
+                  effectiveRange: nil
+              ) as? Bool == true
+        else {
+            return nil
+        }
+
+        var prefixEnd = start
+        while prefixEnd < end,
+              textStorage.attribute(
+                  Self.numberedListPrefixAttribute,
+                  at: prefixEnd,
+                  effectiveRange: nil
+              ) as? Bool == true {
+            prefixEnd += 1
+        }
+
+        return NSRange(location: start, length: prefixEnd - start)
+    }
+
+    private func mappedSelection(
+        _ selection: NSRange,
+        through edits: [(range: NSRange, insertedLength: Int)]
+    ) -> NSRange {
+        let sortedEdits = edits.sorted { $0.range.location < $1.range.location }
+        if selection.length == 0 {
+            let location = mappedSelectionBoundary(
+                selection.location,
+                through: sortedEdits,
+                affinity: .trailing
+            )
+            return NSRange(location: location, length: 0)
+        }
+
+        let start = mappedSelectionBoundary(
+            selection.location,
+            through: sortedEdits,
+            affinity: .leading
+        )
+        let end = mappedSelectionBoundary(
+            NSMaxRange(selection),
+            through: sortedEdits,
+            affinity: .trailing
+        )
+        return NSRange(location: start, length: max(0, end - start))
+    }
+
+    private enum SelectionBoundaryAffinity {
+        case leading
+        case trailing
+    }
+
+    private func mappedSelectionBoundary(
+        _ originalLocation: Int,
+        through edits: [(range: NSRange, insertedLength: Int)],
+        affinity: SelectionBoundaryAffinity
+    ) -> Int {
+        var offset = 0
+
+        for edit in edits {
+            let editStart = edit.range.location
+            let editEnd = NSMaxRange(edit.range)
+            let updatedStart = editStart + offset
+
+            if originalLocation < editStart {
+                break
+            }
+
+            if originalLocation == editStart {
+                return affinity == .leading
+                    ? updatedStart
+                    : updatedStart + edit.insertedLength
+            }
+
+            if originalLocation <= editEnd {
+                let relativeLocation = originalLocation - editStart
+                return updatedStart + min(relativeLocation, edit.insertedLength)
+            }
+
+            offset += edit.insertedLength - edit.range.length
+        }
+
+        return originalLocation + offset
     }
 
     private func handleDeleteBackward() -> Bool {
@@ -1991,6 +2206,18 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             return false
         }
 
+        if let numberedPrefixDelete = numberedPrefixPreservingDelete(for: selectedRange) {
+            guard numberedPrefixDelete.length > 0 else {
+                return true
+            }
+
+            return applyTextStorageEdit(
+                range: numberedPrefixDelete,
+                replacement: "",
+                selectedRange: NSRange(location: numberedPrefixDelete.location, length: 0)
+            ) {}
+        }
+
         guard let structuredDelete = structuredLineDeletionRange(for: selectedRange) else {
             return false
         }
@@ -2062,6 +2289,20 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             range: NSRange(location: deleteStart, length: max(0, deleteEnd - deleteStart)),
             lineRange: firstLine.index..<(lastLine.index + 1)
         )
+    }
+
+    private func numberedPrefixPreservingDelete(for selectedRange: NSRange) -> NSRange? {
+        guard let line = lineInfo(at: selectedRange.location),
+              case .numbered = kind(at: line.index),
+              let prefixRange = line.prefixRange,
+              selectedRange.intersection(prefixRange) != nil,
+              NSMaxRange(selectedRange) <= NSMaxRange(line.contentRange)
+        else {
+            return nil
+        }
+
+        return selectedRange.intersection(line.contentRange)
+            ?? NSRange(location: line.contentRange.location, length: 0)
     }
 
     private func selectionIncludesLineStructure(
@@ -2445,10 +2686,10 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         isApplyingProgrammaticChange = true
         textView.textStorage?.replaceCharacters(in: line.contentRange, with: replacement)
         lineKinds[line.index] = kind
-        reconcileLineKinds()
         textView.setSelectedRange(
             NSRange(location: line.contentRange.location + newSelectionOffset, length: 0)
         )
+        reconcileLineKinds()
         textView.didChangeText()
         isApplyingProgrammaticChange = false
 
@@ -2587,8 +2828,15 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
 
         textView.textStorage?.replaceCharacters(in: range, with: replacement)
         updateLineKinds()
+        let textLength = (textView.string as NSString).length
+        let boundedLocation = max(0, min(selectedRange.location, textLength))
+        textView.setSelectedRange(
+            NSRange(
+                location: boundedLocation,
+                length: min(selectedRange.length, max(0, textLength - boundedLocation))
+            )
+        )
         reconcileLineKinds()
-        textView.setSelectedRange(selectedRange)
         textView.didChangeText()
         isApplyingProgrammaticChange = false
         notifyTextChangedAndRefresh(scrollSelection: true)
@@ -2674,6 +2922,119 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             NSRange(location: infos[lineIndex].contentRange.location, length: 0)
         )
         return pasteMarkdownTasks(markdown)
+    }
+
+    func deleteLineForTesting(lineIndex: Int) -> Bool {
+        let infos = lineInfos()
+        guard infos.indices.contains(lineIndex) else {
+            return false
+        }
+
+        textView.setSelectedRange(infos[lineIndex].lineRange)
+        return self.textView(textView, doCommandBy: #selector(NSResponder.deleteBackward(_:)))
+    }
+
+    func numberedPrefixRangeForTesting(lineIndex: Int) -> NSRange? {
+        let infos = lineInfos()
+        guard infos.indices.contains(lineIndex) else {
+            return nil
+        }
+        return infos[lineIndex].prefixRange
+    }
+
+    func contentRangeForTesting(lineIndex: Int) -> NSRange? {
+        let infos = lineInfos()
+        guard infos.indices.contains(lineIndex) else {
+            return nil
+        }
+        return infos[lineIndex].contentRange
+    }
+
+    func selectRangeForTesting(_ range: NSRange) {
+        textView.setSelectedRange(range)
+    }
+
+    func selectAllForTesting() {
+        textView.selectAll(nil)
+    }
+
+    func extendSelectionRightForTesting(from location: Int) {
+        textView.setSelectedRange(NSRange(location: location, length: 0))
+        textView.moveRightAndModifySelection(nil)
+    }
+
+    func deleteSelectionForTesting() {
+        if !self.textView(textView, doCommandBy: #selector(NSResponder.deleteBackward(_:))) {
+            textView.deleteBackward(nil)
+        }
+    }
+
+    func pressBackspaceForTesting() {
+        if !self.textView(textView, doCommandBy: #selector(NSResponder.deleteBackward(_:))) {
+            textView.deleteBackward(nil)
+        }
+    }
+
+    func pressTabForTesting() {
+        if !self.textView(textView, doCommandBy: #selector(NSResponder.insertTab(_:))) {
+            textView.insertTab(nil)
+        }
+    }
+
+    var selectedRangeForTesting: NSRange {
+        textView.selectedRange()
+    }
+
+    var selectedTextForTesting: String {
+        let selectedRange = textView.selectedRange()
+        guard selectedRange.length > 0 else {
+            return ""
+        }
+        return (textView.string as NSString).substring(with: selectedRange)
+    }
+
+    var presentationTextForTesting: String {
+        textView.string
+    }
+
+    func copySelectionForTesting() -> String? {
+        guard copySelectionToPasteboard() else {
+            return nil
+        }
+        return NSPasteboard.general.string(forType: .string)
+    }
+
+    func insertionLocationAtNumberedPrefixCharacterForTesting(
+        lineIndex: Int,
+        characterOffset: Int
+    ) -> Int? {
+        guard let layoutManager = textView.layoutManager,
+              let textContainer = textView.textContainer,
+              let prefixRange = numberedPrefixRangeForTesting(lineIndex: lineIndex),
+              characterOffset >= 0,
+              characterOffset < prefixRange.length
+        else {
+            return nil
+        }
+
+        layoutManager.ensureLayout(for: textContainer)
+        let characterRange = NSRange(
+            location: prefixRange.location + characterOffset,
+            length: 1
+        )
+        let glyphRange = layoutManager.glyphRange(
+            forCharacterRange: characterRange,
+            actualCharacterRange: nil
+        )
+        let glyphRect = layoutManager.boundingRect(
+            forGlyphRange: glyphRange,
+            in: textContainer
+        )
+        let point = NSPoint(
+            x: textView.textContainerOrigin.x + glyphRect.midX,
+            y: textView.textContainerOrigin.y + glyphRect.midY
+        )
+        return textView.characterIndexForInsertion(at: point)
     }
 
     func checkboxRespondsToClickForTesting(lineIndex: Int) -> Bool {
@@ -3006,6 +3367,14 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         let nsText = textView.string as NSString
 
         for line in lineInfos() {
+            if case .numbered = kind(at: line.index) {
+                let visibleLineRange = rawTextRange(for: line, in: nsText)
+                if let intersection = visibleLineRange.intersection(selectedRange) {
+                    markdownLines.append(nsText.substring(with: intersection))
+                }
+                continue
+            }
+
             guard let intersection = line.contentRange.intersection(selectedRange) else {
                 if selectedRange.contains(line.lineRange.location),
                    line.contentRange.length == 0 {
@@ -3210,13 +3579,8 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
                     )
                 )
 
-            case .numbered(let indentColumns, let number):
-                markerItems.append(
-                    LineMarkerOverlayItem(
-                        kind: .number(number, level: listLevel(for: indentColumns)),
-                        frame: markerFrame(for: indentColumns, textContainerOrigin: textContainerOrigin, visibleBounds: visibleBounds, y: y)
-                    )
-                )
+            case .numbered:
+                break
 
             case .quote:
                 markerItems.append(
@@ -3437,6 +3801,18 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
                 range: paragraphRange
             )
 
+            if let prefixRange = line.prefixRange,
+               prefixRange.length > 0 {
+                textStorage.addAttributes(
+                    [
+                        .font: NSFont.systemFont(ofSize: 12, weight: .semibold),
+                        .foregroundColor: palette.textNS.withAlphaComponent(0.7),
+                        Self.numberedListPrefixAttribute: true
+                    ],
+                    range: prefixRange
+                )
+            }
+
             if imageReference(in: line.text) != nil,
                line.contentRange.length > 0 {
                 textStorage.addAttributes(
@@ -3628,8 +4004,7 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             textIndent = lineTextIndent(for: kind)
         }
 
-        style.firstLineHeadIndent = textIndent
-        style.headIndent = textIndent
+        applyListParagraphIndents(to: style, kind: kind, fallbackTextIndent: textIndent)
         if case .tableRow(_, let columnCount) = kind {
             applyTableTabStops(to: style, columnCount: columnCount)
         }
@@ -3649,14 +4024,32 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             textIndent = lineTextIndent(for: kind)
         }
 
-        style.firstLineHeadIndent = textIndent
-        style.headIndent = textIndent
+        applyListParagraphIndents(to: style, kind: kind, fallbackTextIndent: textIndent)
         if case .tableRow(_, let columnCount) = kind {
             applyTableTabStops(to: style, columnCount: columnCount)
         }
         style.minimumLineHeight = kind.isCodeBlock ? lineHeight() + 2 : lineHeight()
         style.lineBreakMode = .byWordWrapping
         return style
+    }
+
+    private func applyListParagraphIndents(
+        to style: NSMutableParagraphStyle,
+        kind: LineKind,
+        fallbackTextIndent: CGFloat
+    ) {
+        guard case .numbered(let indentColumns, _) = kind else {
+            style.firstLineHeadIndent = fallbackTextIndent
+            style.headIndent = fallbackTextIndent
+            return
+        }
+
+        let markerIndent = taskCheckboxIndent(for: indentColumns)
+        let contentIndent = taskTextIndent(for: indentColumns)
+        style.firstLineHeadIndent = markerIndent
+        style.headIndent = contentIndent
+        style.tabStops = [NSTextTab(textAlignment: .left, location: contentIndent)]
+        style.defaultTabInterval = TodoLayout.levelIndent
     }
 
     private func collapsedTableSyntaxParagraphStyle() -> NSParagraphStyle {
@@ -3944,6 +4337,8 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         }
 
         lineKinds = normalizedLineKinds(lineKinds, for: textView.string)
+        renumberNumberedLists()
+        synchronizeNumberedListPrefixes()
 
         if lineKinds.isEmpty {
             lineKinds = [.normal]
@@ -3961,7 +4356,7 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         }
 
         let deletedText = nsTextBefore.substring(with: edit.range) as NSString
-        let oldInfos = lineInfos(for: edit.text)
+        let oldInfos = lineInfos(for: edit.text, lineKinds: edit.lineKinds)
         let removedLineIndexes = deletedNewlineLocations(
             in: deletedText as String,
             startingAt: edit.range.location
@@ -4027,14 +4422,28 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     }
 
     private func displayLines() -> [String] {
-        textView.string.components(separatedBy: "\n")
+        lineInfos().map(\.text)
+    }
+
+    private func presentationText(lines: [String], lineKinds kinds: [LineKind]) -> String {
+        lines.enumerated().map { index, line in
+            guard case .numbered(let indentColumns, let number) = kind(at: index, in: kinds) else {
+                return line
+            }
+
+            return NumberedListMarkerFormatter.presentationPrefix(
+                number: number,
+                indentColumns: indentColumns
+            ) + line
+        }
+        .joined(separator: "\n")
     }
 
     private func lineInfos() -> [DisplayLineInfo] {
-        lineInfos(for: textView.string)
+        lineInfos(for: textView.string, lineKinds: lineKinds)
     }
 
-    private func lineInfos(for text: String) -> [DisplayLineInfo] {
+    private func lineInfos(for text: String, lineKinds kinds: [LineKind]) -> [DisplayLineInfo] {
         let lines = text.components(separatedBy: "\n")
         var result: [DisplayLineInfo] = []
         var location = 0
@@ -4043,13 +4452,23 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             let length = (line as NSString).length
             let hasNewline = index < lines.count - 1
             let lineRange = NSRange(location: location, length: length + (hasNewline ? 1 : 0))
-            let contentRange = NSRange(location: location, length: length)
+            let prefixRange = numberedPresentationPrefixRange(
+                in: line,
+                lineLocation: location,
+                kind: kind(at: index, in: kinds)
+            )
+            let contentLocation = prefixRange.map(NSMaxRange) ?? location
+            let contentRange = NSRange(
+                location: contentLocation,
+                length: max(0, location + length - contentLocation)
+            )
             result.append(
                 DisplayLineInfo(
                     index: index,
                     lineRange: lineRange,
+                    prefixRange: prefixRange,
                     contentRange: contentRange,
-                    text: line
+                    text: (text as NSString).substring(with: contentRange)
                 )
             )
             location += lineRange.length
@@ -4060,6 +4479,7 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
                 DisplayLineInfo(
                     index: 0,
                     lineRange: NSRange(location: 0, length: 0),
+                    prefixRange: nil,
                     contentRange: NSRange(location: 0, length: 0),
                     text: ""
                 )
@@ -4067,6 +4487,54 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         }
 
         return result
+    }
+
+    private func numberedPresentationPrefixRange(
+        in line: String,
+        lineLocation: Int,
+        kind: LineKind
+    ) -> NSRange? {
+        guard case .numbered = kind else {
+            return nil
+        }
+
+        let nsLine = line as NSString
+        guard nsLine.length > 0 else {
+            return nil
+        }
+
+        if let generatedRange = generatedNumberedPrefixRange(
+            in: line,
+            lineLocation: lineLocation
+        ) {
+            return generatedRange
+        }
+
+        return nil
+    }
+
+    private func generatedNumberedPrefixRange(
+        in line: String,
+        lineLocation: Int
+    ) -> NSRange? {
+        let nsLine = line as NSString
+        let separatorRange = nsLine.range(of: " ")
+        guard separatorRange.location != NSNotFound,
+              separatorRange.location > 0,
+              separatorRange.location <= 16
+        else {
+            return nil
+        }
+
+        let marker = nsLine.substring(to: separatorRange.location)
+        guard marker.range(
+            of: #"^[A-Za-z0-9]+\.$"#,
+            options: .regularExpression
+        ) != nil else {
+            return nil
+        }
+
+        return NSRange(location: lineLocation, length: NSMaxRange(separatorRange))
     }
 
     private func lineInfo(at location: Int) -> DisplayLineInfo? {
@@ -4274,7 +4742,12 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             }
 
             if let numbered = parseNumberedLine(line) {
-                displayLines.append(numbered.text)
+                displayLines.append(
+                    NumberedListMarkerFormatter.presentationPrefix(
+                        number: numbered.number,
+                        indentColumns: numbered.indentColumns
+                    ) + numbered.text
+                )
                 lineKinds.append(.numbered(indentColumns: numbered.indentColumns, number: numbered.number))
                 activeTaskIndentColumns = nil
                 index += 1
@@ -5063,7 +5536,7 @@ private final class TodoTextView: NSTextView {
             return
         }
 
-        super.selectAll(sender)
+        setSelectedRange(NSRange(location: 0, length: (string as NSString).length))
     }
 
     override func cut(_ sender: Any?) {
@@ -5101,6 +5574,11 @@ private final class TodoTextView: NSTextView {
         let character = event.charactersIgnoringModifiers?.lowercased()
         guard flags.contains(.command) || flags.contains(.control) else {
             super.keyDown(with: event)
+            return
+        }
+
+        if character == "a", flags.contains(.command) {
+            selectAll(nil)
             return
         }
 
@@ -5202,7 +5680,6 @@ private struct TodoCheckboxOverlayItem {
 private struct LineMarkerOverlayItem {
     enum Kind {
         case bullet(level: Int)
-        case number(Int, level: Int)
         case quote
         case codeBlock(language: String?)
         case horizontalRule
@@ -6406,7 +6883,6 @@ private final class TodoCheckboxOverlayView: NSView {
             needsDisplay = true
         }
     }
-
     private var items: [TodoCheckboxOverlayItem] = []
     private var markers: [LineMarkerOverlayItem] = []
 
@@ -6526,9 +7002,6 @@ private final class TodoCheckboxOverlayView: NSView {
         case .bullet(let level):
             drawBullet(level: level, in: item.frame)
 
-        case .number(let number, let level):
-            drawMarkerText(numberedMarker(number: number, level: level), in: item.frame)
-
         case .quote:
             let bar = NSRect(x: item.frame.minX + 5, y: item.frame.minY + 1, width: 3, height: item.frame.height - 2)
             palette.accentNS.withAlphaComponent(0.45).setFill()
@@ -6644,21 +7117,6 @@ private final class TodoCheckboxOverlayView: NSView {
         }
     }
 
-    private func drawMarkerText(_ text: String, in rect: NSRect) {
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 12, weight: .semibold),
-            .foregroundColor: palette.textNS.withAlphaComponent(0.7)
-        ]
-        let attributed = NSAttributedString(string: text, attributes: attributes)
-        let size = attributed.size()
-        attributed.draw(
-            at: NSPoint(
-                x: rect.midX - size.width / 2,
-                y: rect.midY - size.height / 2
-            )
-        )
-    }
-
     private func drawBullet(level: Int, in rect: NSRect) {
         let color = palette.textNS.withAlphaComponent(0.72)
 
@@ -6697,47 +7155,4 @@ private final class TodoCheckboxOverlayView: NSView {
         }
     }
 
-    private func numberedMarker(number: Int, level: Int) -> String {
-        let safeNumber = max(1, number)
-        switch level % 3 {
-        case 1:
-            return "\(alphabeticNumber(safeNumber))."
-        case 2:
-            return "\(romanNumber(safeNumber))."
-        default:
-            return "\(safeNumber)."
-        }
-    }
-
-    private func alphabeticNumber(_ number: Int) -> String {
-        var value = number
-        var scalars: [UnicodeScalar] = []
-
-        while value > 0 {
-            value -= 1
-            scalars.append(UnicodeScalar(97 + value % 26)!)
-            value /= 26
-        }
-
-        return String(String.UnicodeScalarView(scalars.reversed()))
-    }
-
-    private func romanNumber(_ number: Int) -> String {
-        let numerals: [(value: Int, symbol: String)] = [
-            (1000, "m"), (900, "cm"), (500, "d"), (400, "cd"),
-            (100, "c"), (90, "xc"), (50, "l"), (40, "xl"),
-            (10, "x"), (9, "ix"), (5, "v"), (4, "iv"), (1, "i")
-        ]
-        var remainder = number
-        var result = ""
-
-        for numeral in numerals {
-            while remainder >= numeral.value {
-                result += numeral.symbol
-                remainder -= numeral.value
-            }
-        }
-
-        return result
-    }
 }

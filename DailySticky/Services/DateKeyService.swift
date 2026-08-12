@@ -5,6 +5,7 @@ final class DateKeyService {
     private let dateKeyFormatter: DateFormatter
     private let displayDateFormatter: DateFormatter
     private let compactDisplayDateFormatter: DateFormatter
+    private let shortDisplayDateFormatter: DateFormatter
 
     init(calendar: Calendar = .autoupdatingCurrent) {
         self.calendar = calendar
@@ -29,6 +30,13 @@ final class DateKeyService {
         compactDisplayFormatter.timeZone = calendar.timeZone
         compactDisplayFormatter.dateFormat = "MMM d, yyyy"
         self.compactDisplayDateFormatter = compactDisplayFormatter
+
+        let shortDisplayFormatter = DateFormatter()
+        shortDisplayFormatter.calendar = calendar
+        shortDisplayFormatter.locale = Locale.autoupdatingCurrent
+        shortDisplayFormatter.timeZone = calendar.timeZone
+        shortDisplayFormatter.dateFormat = "MMM d"
+        self.shortDisplayDateFormatter = shortDisplayFormatter
     }
 
     func todayDateKey() -> String {
@@ -76,5 +84,21 @@ final class DateKeyService {
         }
 
         return compactDisplayDateFormatter.string(from: date)
+    }
+
+    func shortDisplayTitle(for dateKey: String) -> String {
+        guard let date = date(from: dateKey) else {
+            return dateKey
+        }
+
+        return shortDisplayDateFormatter.string(from: date)
+    }
+
+    func dayNumber(for dateKey: String) -> String {
+        guard let date = date(from: dateKey) else {
+            return ""
+        }
+
+        return String(calendar.component(.day, from: date))
     }
 }

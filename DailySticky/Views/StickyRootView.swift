@@ -2,12 +2,17 @@ import SwiftUI
 
 struct StickyRootView: View {
     @EnvironmentObject private var appState: AppState
+    let onToggleNoteSearch: () -> Void
+    let onNoteSearchAnchorChange: (NSRect) -> Void
 
     var body: some View {
         let palette = appState.themePalette
 
         VStack(spacing: 0) {
-            DateHeaderView()
+            DateHeaderView(
+                onToggleNoteSearch: onToggleNoteSearch,
+                onNoteSearchAnchorChange: onNoteSearchAnchorChange
+            )
 
             Divider()
                 .overlay(palette.separator)

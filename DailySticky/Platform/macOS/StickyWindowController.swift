@@ -15,11 +15,19 @@ private final class StickyWindow: NSWindow {
 @MainActor
 final class StickyWindowController: NSObject, NSWindowDelegate {
     private let appState: AppState
+    private let onToggleNoteSearch: () -> Void
+    private let onNoteSearchAnchorChange: (NSRect) -> Void
     private var window: NSWindow?
     private var cancellables = Set<AnyCancellable>()
 
-    init(appState: AppState) {
+    init(
+        appState: AppState,
+        onToggleNoteSearch: @escaping () -> Void,
+        onNoteSearchAnchorChange: @escaping (NSRect) -> Void
+    ) {
         self.appState = appState
+        self.onToggleNoteSearch = onToggleNoteSearch
+        self.onNoteSearchAnchorChange = onNoteSearchAnchorChange
         super.init()
         observePinState()
         observeOpacity()
@@ -44,7 +52,10 @@ final class StickyWindowController: NSObject, NSWindowDelegate {
 
     private func makeWindow() -> NSWindow {
         let frame = WindowFrameStore.usableFrame(from: appState.data.settings.windowFrame)
-        let rootView = StickyRootView()
+        let rootView = StickyRootView(
+            onToggleNoteSearch: onToggleNoteSearch,
+            onNoteSearchAnchorChange: onNoteSearchAnchorChange
+        )
             .environmentObject(appState)
         let hostingView = NSHostingView(rootView: rootView)
         hostingView.frame = NSRect(origin: .zero, size: frame.size)

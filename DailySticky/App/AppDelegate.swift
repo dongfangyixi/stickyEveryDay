@@ -9,6 +9,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var helpWindowController: NSWindowController?
     private var quickStartWindowController: NSWindowController?
     private var quickStartSettings: QuickStartSettings?
+    private var noteSearchPanelController: NoteSearchPanelController?
+    private var noteSearchAnchorScreenRect: NSRect?
+    private var searchShortcutMonitor: Any?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
@@ -16,11 +19,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let dateKeyService = DateKeyService()
         let dataStore = JSONAppDataStore()
         let appState = AppState(dataStore: dataStore, dateKeyService: dateKeyService)
-        let stickyWindowController = StickyWindowController(appState: appState)
+        let stickyWindowController = StickyWindowController(
+            appState: appState,
+            onToggleNoteSearch: { [weak self] in
+                self?.toggleNoteSearch(anchorScreenRect: nil)
+            },
+            onNoteSearchAnchorChange: { [weak self] screenRect in
+                self?.updateNoteSearchAnchor(screenRect)
+            }
+        )
 
         self.appState = appState
         self.stickyWindowController = stickyWindowController
+        self.noteSearchPanelController = NoteSearchPanelController(appState: appState)
         AppRuntime.shared.appState = appState
+        installSearchShortcutMonitor()
 
         stickyWindowController.show()
         showQuickStartIfNeeded()
@@ -39,6 +52,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        if let searchShortcutMonitor {
+            NSEvent.removeMonitor(searchShortcutMonitor)
+        }
         appState?.saveImmediately()
     }
 
@@ -48,6 +64,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         window.close()
+    }
+
+    func showNoteSearch(anchorScreenRect: NSRect? = nil) {
+        stickyWindowController?.show()
+        if let anchorScreenRect {
+            noteSearchAnchorScreenRect = anchorScreenRect
+        }
+        noteSearchPanelController?.show(
+            relativeTo: noteSearchAnchorScreenRect,
+            noteWindowFrame: stickyWindowController?.currentWindowFrame
+        )
+    }
+
+    func toggleNoteSearch(anchorScreenRect: NSRect?) {
+        if appState?.isNoteSearchPresented == true {
+            dismissNoteSearch()
+        } else {
+            showNoteSearch(anchorScreenRect: anchorScreenRect)
+        }
+    }
+
+    func dismissNoteSearch() {
+        noteSearchPanelController?.dismiss()
+    }
+
+    func updateNoteSearchAnchor(_ screenRect: NSRect) {
+        noteSearchAnchorScreenRect = screenRect
+    }
+
+    private func installSearchShortcutMonitor() {
+        searchShortcutMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard NoteSearchShortcut.matches(event) else {
+                return event
+            }
+
+            self?.showNoteSearch()
+            return nil
+        }
     }
 
     func showAbout() {
@@ -203,6 +257,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         window.setFrameOrigin(NSPoint(x: x, y: y))
+    }
+}
+
+enum NoteSearchShortcut {
+    static func matches(_ event: NSEvent) -> Bool {
+        matches(
+            charactersIgnoringModifiers: event.charactersIgnoringModifiers,
+            modifierFlags: event.modifierFlags
+        )
+    }
+
+    static func matches(
+        charactersIgnoringModifiers: String?,
+        modifierFlags: NSEvent.ModifierFlags
+    ) -> Bool {
+        let relevantModifiers = modifierFlags.intersection(.deviceIndependentFlagsMask)
+        return charactersIgnoringModifiers?.lowercased() == "f" && relevantModifiers == .command
     }
 }
 

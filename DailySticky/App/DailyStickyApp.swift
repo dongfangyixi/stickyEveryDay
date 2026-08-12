@@ -52,6 +52,15 @@ struct DailyStickyApp: App {
                 }
                 .keyboardShortcut("?", modifiers: [.command])
             }
+
+            CommandGroup(after: .textEditing) {
+                Divider()
+
+                Button("Search Notes") {
+                    appDelegate.showNoteSearch()
+                }
+                .keyboardShortcut("f", modifiers: [.command])
+            }
         }
     }
 }

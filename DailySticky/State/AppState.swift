@@ -14,6 +14,8 @@ final class AppState: ObservableObject {
     @Published private(set) var theme: AppThemeKind
     @Published private(set) var noteOpacity: Double
     @Published private(set) var hasSeenWelcome: Bool
+    @Published private(set) var isNoteSearchPresented = false
+    @Published private(set) var searchReturnDateKey: String?
     @Published var lastErrorMessage: String?
 
     private let dataStore: AppDataStore
@@ -33,6 +35,10 @@ final class AppState: ObservableObject {
         dateKeyService.compactDisplayTitle(for: currentDateKey)
     }
 
+    var currentShortDateTitle: String {
+        dateKeyService.shortDisplayTitle(for: currentDateKey)
+    }
+
     var isShowingToday: Bool {
         currentDateKey == dateKeyService.todayDateKey()
     }
@@ -41,8 +47,38 @@ final class AppState: ObservableObject {
         dataStore.dataFileURL.path
     }
 
+    var hasSearchReturnDestination: Bool {
+        searchReturnDateKey != nil && searchReturnDateKey != currentDateKey
+    }
+
+    var searchReturnDateTitle: String? {
+        searchReturnDateKey.map(dateKeyService.displayTitle)
+    }
+
+    var searchReturnCompactDateTitle: String? {
+        searchReturnDateKey.map(dateKeyService.compactDisplayTitle)
+    }
+
+    var searchReturnButtonTitle: String? {
+        guard let searchReturnDateKey else {
+            return nil
+        }
+        if searchReturnDateKey == dateKeyService.todayDateKey() {
+            return "Back to Today"
+        }
+        return "Back to \(dateKeyService.shortDisplayTitle(for: searchReturnDateKey))"
+    }
+
+    var searchReturnDayNumber: String? {
+        searchReturnDateKey.map(dateKeyService.dayNumber)
+    }
+
     var themePalette: AppTheme.Palette {
         AppTheme.palette(for: theme)
+    }
+
+    func displayTitle(for dateKey: String) -> String {
+        dateKeyService.displayTitle(for: dateKey)
     }
 
     init(
@@ -114,12 +150,44 @@ final class AppState: ObservableObject {
         openDate(dateKeyService.todayDateKey())
     }
 
+    func presentNoteSearch() {
+        isNoteSearchPresented = true
+    }
+
+    func dismissNoteSearch() {
+        isNoteSearchPresented = false
+    }
+
+    func openSearchResult(_ dateKey: String) {
+        guard dateKeyService.isValidDateKey(dateKey) else {
+            return
+        }
+
+        if dateKey != currentDateKey, searchReturnDateKey == nil {
+            searchReturnDateKey = currentDateKey
+        }
+        isNoteSearchPresented = false
+        openDate(dateKey)
+    }
+
+    func returnToSearchOrigin() {
+        guard let returnDateKey = searchReturnDateKey else {
+            return
+        }
+
+        searchReturnDateKey = nil
+        openDate(returnDateKey)
+    }
+
     func openDate(_ dateKey: String) {
         guard dateKeyService.isValidDateKey(dateKey) else {
             return
         }
 
         currentDateKey = dateKey
+        if searchReturnDateKey == dateKey {
+            searchReturnDateKey = nil
+        }
 
         mutateData(saveMode: .immediate) { data in
             _ = dayPageController.ensurePage(dateKey: dateKey, in: &data)
