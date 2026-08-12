@@ -364,15 +364,16 @@ private struct QuickStartHeaderDemo: View {
 
         QuickStartInstructionRow(
             title: "Move through days",
-            detail: "Use the header buttons. Back to Today appears when you are not on today."
+            detail: "Use the arrows to move between days. A Today button appears whenever you are viewing another date."
         ) {
             HStack(spacing: 6) {
                 DemoIconButton(systemName: "chevron.left")
                 Text("Jul 9")
                     .font(.system(size: 12, weight: .semibold, design: .rounded))
                     .frame(minWidth: 48)
-                DemoTextButton(title: "Back to Today", systemName: "calendar")
                 DemoIconButton(systemName: "chevron.right")
+                DemoTextButton(title: "Today")
+                DemoIconButton(systemName: "magnifyingglass")
                 DemoIconButton(systemName: "pin.fill", isActive: true)
             }
             .foregroundStyle(palette.text)
@@ -531,19 +532,15 @@ private struct DemoIconButton: View {
 
 private struct DemoTextButton: View {
     let title: String
-    let systemName: String
     @EnvironmentObject private var appState: AppState
 
     var body: some View {
         let palette = appState.themePalette
 
-        HStack(spacing: 4) {
-            Text(title)
-                .lineLimit(1)
-            Image(systemName: systemName)
-        }
+        Text(title)
+            .lineLimit(1)
         .font(.system(size: 11, weight: .semibold))
-        .foregroundStyle(palette.secondaryText)
+        .foregroundStyle(palette.text)
         .padding(.horizontal, 8)
         .frame(height: 22)
         .background(

@@ -238,13 +238,17 @@ final class NoteSearchFeatureTests: XCTestCase {
 
         XCTAssertEqual(appState.currentDateKey, "2026-07-28")
         XCTAssertEqual(appState.searchReturnDateKey, "2026-08-10")
-        XCTAssertTrue(appState.hasSearchReturnDestination)
+        XCTAssertEqual(
+            appState.headerReturnState,
+            .searchOrigin(dateKey: "2026-08-10")
+        )
         XCTAssertFalse(appState.isNoteSearchPresented)
 
         appState.returnToSearchOrigin()
 
         XCTAssertEqual(appState.currentDateKey, "2026-08-10")
         XCTAssertNil(appState.searchReturnDateKey)
+        XCTAssertEqual(appState.headerReturnState, .today)
     }
 
     func testOpeningSeveralSearchResultsKeepsTheFirstWorkingDateAsOrigin() {
@@ -265,6 +269,104 @@ final class NoteSearchFeatureTests: XCTestCase {
 
         XCTAssertEqual(appState.currentDateKey, "2026-08-10")
         XCTAssertNil(appState.searchReturnDateKey)
+    }
+
+    func testManualNavigationAwayFromSearchResultAlwaysClearsSearchJourney() {
+        let appState = makeAppState(lastOpenedDateKey: "2026-08-10")
+
+        appState.openSearchResult("2026-07-28")
+        appState.goToPreviousDay()
+
+        XCTAssertEqual(appState.currentDateKey, "2026-07-27")
+        XCTAssertNil(appState.searchReturnDateKey)
+        XCTAssertEqual(appState.headerReturnState, .today)
+    }
+
+    func testSearchReturnStateTakesPrecedenceWhileViewingOffTodayResult() {
+        let appState = makeAppState(lastOpenedDateKey: "2026-08-10")
+
+        appState.openSearchResult("2026-07-28")
+
+        XCTAssertFalse(appState.isShowingToday)
+        XCTAssertEqual(
+            appState.headerReturnState,
+            .searchOrigin(dateKey: "2026-08-10")
+        )
+    }
+
+    func testSearchOpenedFromTodayUsesTodayChipInsteadOfSpecialReturnState() {
+        let dateKeyService = DateKeyService()
+        let todayDateKey = dateKeyService.todayDateKey()
+        let resultDateKey = dateKeyService.dateKey(byAddingDays: -7, to: todayDateKey)!
+        let appState = makeAppState(
+            lastOpenedDateKey: todayDateKey,
+            dateKeyService: dateKeyService
+        )
+
+        appState.openSearchResult(resultDateKey)
+
+        XCTAssertEqual(appState.currentDateKey, resultDateKey)
+        XCTAssertNil(appState.searchReturnDateKey)
+        XCTAssertEqual(appState.headerReturnState, .today)
+    }
+
+    func testHeaderReturnStateIsEmptyWhenViewingToday() {
+        let dateKeyService = DateKeyService()
+        let todayDateKey = dateKeyService.todayDateKey()
+        let appState = makeAppState(
+            lastOpenedDateKey: todayDateKey,
+            dateKeyService: dateKeyService
+        )
+
+        XCTAssertEqual(appState.headerReturnState, .none)
+    }
+
+    func testReturnChipDateUsesLocalizedMonthAndDayWithoutYear() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+
+        let englishService = DateKeyService(
+            calendar: calendar,
+            locale: Locale(identifier: "en_US")
+        )
+        let chineseService = DateKeyService(
+            calendar: calendar,
+            locale: Locale(identifier: "zh_CN")
+        )
+
+        XCTAssertEqual(englishService.shortDisplayTitle(for: "2026-08-12"), "Aug 12")
+        XCTAssertEqual(
+            englishService.accessibleShortDisplayTitle(for: "2026-08-12"),
+            "August 12"
+        )
+        XCTAssertEqual(chineseService.shortDisplayTitle(for: "2026-08-12"), "8月12日")
+        XCTAssertFalse(chineseService.shortDisplayTitle(for: "2026-08-12").contains("2026"))
+    }
+
+    func testCompactNavigationDateKeepsLocalizedWeekdayAndDropsYear() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+
+        let englishService = DateKeyService(
+            calendar: calendar,
+            locale: Locale(identifier: "en_US")
+        )
+        let chineseService = DateKeyService(
+            calendar: calendar,
+            locale: Locale(identifier: "zh_CN")
+        )
+
+        XCTAssertEqual(
+            englishService.compactNavigationTitle(for: "2026-08-12"),
+            "Wed, Aug 12"
+        )
+        let chineseTitle = chineseService.compactNavigationTitle(for: "2026-08-12")
+        XCTAssertTrue(chineseTitle.contains("8月12日"))
+        XCTAssertTrue(chineseTitle.contains("周三"))
+        XCTAssertFalse(chineseTitle.contains("2026"))
+        XCTAssertFalse(
+            englishService.compactNavigationTitle(for: "2026-08-12").contains("2026")
+        )
     }
 
     func testOpeningCurrentDateFromSearchDoesNotCreateReturnJourney() {
@@ -296,7 +398,10 @@ final class NoteSearchFeatureTests: XCTestCase {
         )
     }
 
-    private func makeAppState(lastOpenedDateKey: String) -> AppState {
+    private func makeAppState(
+        lastOpenedDateKey: String,
+        dateKeyService: DateKeyService = DateKeyService()
+    ) -> AppState {
         let data = AppData(
             schemaVersion: 1,
             pages: [lastOpenedDateKey: page(lastOpenedDateKey, "working note")],
@@ -308,7 +413,7 @@ final class NoteSearchFeatureTests: XCTestCase {
         )
         return AppState(
             dataStore: InMemoryAppDataStore(data: data),
-            dateKeyService: DateKeyService()
+            dateKeyService: dateKeyService
         )
     }
 

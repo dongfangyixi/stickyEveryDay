@@ -2,13 +2,18 @@ import Foundation
 
 final class DateKeyService {
     private let calendar: Calendar
+    private let locale: Locale
     private let dateKeyFormatter: DateFormatter
     private let displayDateFormatter: DateFormatter
     private let compactDisplayDateFormatter: DateFormatter
     private let shortDisplayDateFormatter: DateFormatter
 
-    init(calendar: Calendar = .autoupdatingCurrent) {
+    init(
+        calendar: Calendar = .autoupdatingCurrent,
+        locale: Locale = .autoupdatingCurrent
+    ) {
         self.calendar = calendar
+        self.locale = locale
 
         let keyFormatter = DateFormatter()
         keyFormatter.calendar = calendar
@@ -19,21 +24,21 @@ final class DateKeyService {
 
         let displayFormatter = DateFormatter()
         displayFormatter.calendar = calendar
-        displayFormatter.locale = Locale.autoupdatingCurrent
+        displayFormatter.locale = locale
         displayFormatter.timeZone = calendar.timeZone
         displayFormatter.dateFormat = "EEEE, MMMM d, yyyy"
         self.displayDateFormatter = displayFormatter
 
         let compactDisplayFormatter = DateFormatter()
         compactDisplayFormatter.calendar = calendar
-        compactDisplayFormatter.locale = Locale.autoupdatingCurrent
+        compactDisplayFormatter.locale = locale
         compactDisplayFormatter.timeZone = calendar.timeZone
         compactDisplayFormatter.dateFormat = "MMM d, yyyy"
         self.compactDisplayDateFormatter = compactDisplayFormatter
 
         let shortDisplayFormatter = DateFormatter()
         shortDisplayFormatter.calendar = calendar
-        shortDisplayFormatter.locale = Locale.autoupdatingCurrent
+        shortDisplayFormatter.locale = locale
         shortDisplayFormatter.timeZone = calendar.timeZone
         shortDisplayFormatter.dateFormat = "MMM d"
         self.shortDisplayDateFormatter = shortDisplayFormatter
@@ -86,19 +91,44 @@ final class DateKeyService {
         return compactDisplayDateFormatter.string(from: date)
     }
 
+    func compactNavigationTitle(for dateKey: String) -> String {
+        guard let date = date(from: dateKey) else {
+            return dateKey
+        }
+
+        var formatStyle = Date.FormatStyle()
+        formatStyle.calendar = calendar
+        formatStyle.locale = locale
+        formatStyle.timeZone = calendar.timeZone
+        return date.formatted(
+            formatStyle
+                .weekday(.abbreviated)
+                .month(.abbreviated)
+                .day()
+        )
+    }
+
     func shortDisplayTitle(for dateKey: String) -> String {
         guard let date = date(from: dateKey) else {
             return dateKey
         }
 
-        return shortDisplayDateFormatter.string(from: date)
+        var formatStyle = Date.FormatStyle()
+        formatStyle.calendar = calendar
+        formatStyle.locale = locale
+        formatStyle.timeZone = calendar.timeZone
+        return date.formatted(formatStyle.month(.abbreviated).day())
     }
 
-    func dayNumber(for dateKey: String) -> String {
+    func accessibleShortDisplayTitle(for dateKey: String) -> String {
         guard let date = date(from: dateKey) else {
-            return ""
+            return dateKey
         }
 
-        return String(calendar.component(.day, from: date))
+        var formatStyle = Date.FormatStyle()
+        formatStyle.calendar = calendar
+        formatStyle.locale = locale
+        formatStyle.timeZone = calendar.timeZone
+        return date.formatted(formatStyle.month(.wide).day())
     }
 }

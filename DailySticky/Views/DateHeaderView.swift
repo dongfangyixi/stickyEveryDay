@@ -9,117 +9,119 @@ struct DateHeaderView: View {
     var body: some View {
         let palette = appState.themePalette
 
-        HStack(spacing: 0) {
-            HStack(spacing: 4) {
-                Button {
-                    appState.goToPreviousDay()
-                } label: {
-                    Image(systemName: "chevron.left")
-                }
-                .buttonStyle(StickyIconButtonStyle(palette: palette))
-                .help("Previous day")
+        GeometryReader { proxy in
+            let isCompact = proxy.size.width < 400
 
-                ViewThatFits(in: .horizontal) {
-                    Text(appState.currentDateTitle)
-                        .fixedSize(horizontal: true, vertical: false)
-                    Text(appState.currentCompactDateTitle)
-                        .fixedSize(horizontal: true, vertical: false)
-                }
-                .background { WindowDragArea() }
-                .font(.system(size: 14, weight: .semibold, design: .rounded))
-                .lineLimit(1)
-                .frame(height: 28)
-
-                Button {
-                    appState.goToNextDay()
-                } label: {
-                    Image(systemName: "chevron.right")
-                }
-                .buttonStyle(StickyIconButtonStyle(palette: palette))
-                .help("Next day")
-            }
-            .layoutPriority(2)
-
-            WindowDragArea()
-                .frame(minWidth: 4, maxWidth: .infinity)
-                .frame(height: 28)
-                .layoutPriority(-1)
-
-            HStack(spacing: 8) {
-                if appState.hasSearchReturnDestination,
-                   let buttonTitle = appState.searchReturnButtonTitle,
-                   let dayNumber = appState.searchReturnDayNumber {
+            HStack(spacing: 0) {
+                HStack(spacing: 4) {
                     Button {
-                        appState.returnToSearchOrigin()
+                        appState.goToPreviousDay()
                     } label: {
-                        ViewThatFits(in: .horizontal) {
-                            HStack(spacing: 4) {
-                                Text(buttonTitle)
-                                    .lineLimit(1)
-                                CalendarDateIcon(dayNumber: dayNumber)
-                            }
+                        Image(systemName: "chevron.left")
+                    }
+                    .buttonStyle(StickyIconButtonStyle(palette: palette))
+                    .help("Previous day")
 
-                            HStack(spacing: 4) {
-                                Image(systemName: "return")
-                                CalendarDateIcon(dayNumber: dayNumber)
+                    Group {
+                        if isCompact {
+                            Text(appState.currentShortDateTitle)
+                        } else {
+                            ViewThatFits(in: .horizontal) {
+                                Text(appState.currentDateTitle)
+                                    .fixedSize(horizontal: true, vertical: false)
+                                Text(appState.currentCompactDateTitle)
+                                    .fixedSize(horizontal: true, vertical: false)
                             }
                         }
                     }
-                    .buttonStyle(StickyTextButtonStyle(palette: palette))
-                    .accessibilityLabel(buttonTitle)
-                    .help(buttonTitle)
-                } else if !appState.isShowingToday {
+                    .background { WindowDragArea() }
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .frame(height: StickyHeaderControlMetrics.height)
+
                     Button {
-                        appState.jumpToToday()
+                        appState.goToNextDay()
                     } label: {
-                        ViewThatFits(in: .horizontal) {
-                            HStack(spacing: 4) {
-                                Text("Back to Today")
-                                    .lineLimit(1)
-                                CalendarDateIcon(dayNumber: todayDayNumber)
-                            }
-
-                            HStack(spacing: 4) {
-                                Image(systemName: "return")
-                                CalendarDateIcon(dayNumber: todayDayNumber)
-                            }
-                        }
+                        Image(systemName: "chevron.right")
                     }
-                    .buttonStyle(StickyTextButtonStyle(palette: palette))
-                    .accessibilityLabel("Back to Today")
-                    .help("Back to today")
+                    .buttonStyle(StickyIconButtonStyle(palette: palette))
+                    .help("Next day")
                 }
+                .layoutPriority(2)
 
-                Button {
-                    onToggleNoteSearch()
-                } label: {
-                    Image(systemName: "magnifyingglass")
-                }
-                .buttonStyle(
-                    StickyIconButtonStyle(
-                        isActive: appState.isNoteSearchPresented,
-                        palette: palette
+                WindowDragArea()
+                    .frame(minWidth: 4, maxWidth: .infinity)
+                    .frame(height: StickyHeaderControlMetrics.height)
+                    .layoutPriority(-1)
+
+                HStack(spacing: isCompact ? 5 : 8) {
+                    returnChip(isCompact: isCompact, palette: palette)
+
+                    Button {
+                        onToggleNoteSearch()
+                    } label: {
+                        Image(systemName: "magnifyingglass")
+                    }
+                    .buttonStyle(
+                        StickyIconButtonStyle(
+                            isActive: appState.isNoteSearchPresented,
+                            palette: palette
+                        )
                     )
-                )
-                .accessibilityLabel("Search notes")
-                .help("Search notes")
-                .background {
-                    SearchPanelAnchorReader { screenRect in
-                        onNoteSearchAnchorChange(screenRect)
+                    .accessibilityLabel("Search notes")
+                    .help("Search notes")
+                    .background {
+                        SearchPanelAnchorReader { screenRect in
+                            onNoteSearchAnchorChange(screenRect)
+                        }
+                        .allowsHitTesting(false)
                     }
-                    .allowsHitTesting(false)
-                }
 
-                WindowControlsView()
+                    WindowControlsView()
+                }
+                .fixedSize(horizontal: true, vertical: false)
+                .layoutPriority(1)
             }
-            .layoutPriority(1)
+            .padding(.horizontal, isCompact ? 8 : 12)
+            .padding(.vertical, 8)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .frame(height: StickyHeaderControlMetrics.height + 16)
     }
 
-    private var todayDayNumber: String {
-        String(Calendar.autoupdatingCurrent.component(.day, from: Date()))
+    @ViewBuilder
+    private func returnChip(isCompact: Bool, palette: AppTheme.Palette) -> some View {
+        switch appState.headerReturnState {
+        case .none:
+            EmptyView()
+        case .today:
+            Button {
+                appState.jumpToToday()
+            } label: {
+                Text(String(localized: "Today"))
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+            .buttonStyle(StickyHeaderChipButtonStyle(isCompact: isCompact, palette: palette))
+            .accessibilityLabel("Back to today")
+            .help("Back to today")
+        case let .searchOrigin(dateKey):
+            let shortTitle = appState.shortDisplayTitle(for: dateKey)
+            let accessibleTitle = appState.accessibleShortDisplayTitle(for: dateKey)
+
+            Button {
+                appState.returnToSearchOrigin()
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "arrow.uturn.backward")
+                        .font(.system(size: 14, weight: .regular))
+                    Text(shortTitle)
+                }
+                .fixedSize(horizontal: true, vertical: false)
+            }
+            .buttonStyle(StickyHeaderChipButtonStyle(isCompact: isCompact, palette: palette))
+            .accessibilityLabel("Return to \(accessibleTitle)")
+            .help("Return to \(shortTitle) — the day you searched from")
+        }
     }
 }
 
@@ -210,35 +212,5 @@ private struct WindowDragArea: NSViewRepresentable {
 private final class WindowDragNSView: NSView {
     override func mouseDown(with event: NSEvent) {
         window?.performDrag(with: event)
-    }
-}
-
-private struct CalendarDateIcon: View {
-    let dayNumber: String
-
-    var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 2.2, style: .continuous)
-                .stroke(lineWidth: 1.55)
-                .frame(width: 13.4, height: 11.4)
-                .offset(y: 1.35)
-
-            Path { path in
-                path.move(to: CGPoint(x: 4.3, y: 1.2))
-                path.addLine(to: CGPoint(x: 4.3, y: 4.15))
-                path.move(to: CGPoint(x: 10.7, y: 1.2))
-                path.addLine(to: CGPoint(x: 10.7, y: 4.15))
-                path.move(to: CGPoint(x: 1.3, y: 5.35))
-                path.addLine(to: CGPoint(x: 13.7, y: 5.35))
-            }
-            .stroke(style: StrokeStyle(lineWidth: 1.55, lineCap: .round, lineJoin: .round))
-
-            Text(dayNumber)
-                .font(.system(size: 6.7, weight: .black, design: .rounded))
-                .monospacedDigit()
-                .offset(y: 3.1)
-        }
-        .frame(width: 15, height: 15)
-        .accessibilityHidden(true)
     }
 }

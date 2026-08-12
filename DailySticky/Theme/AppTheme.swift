@@ -120,6 +120,11 @@ enum AppTheme {
     }
 }
 
+enum StickyHeaderControlMetrics {
+    static let height: CGFloat = 28
+    static let cornerRadius: CGFloat = 7
+}
+
 struct StickyIconButtonStyle: ButtonStyle {
     var isActive: Bool = false
     var palette: AppTheme.Palette = AppTheme.yellow
@@ -128,9 +133,9 @@ struct StickyIconButtonStyle: ButtonStyle {
         configuration.label
             .font(.system(size: 13, weight: .semibold))
             .foregroundStyle(isActive ? palette.accent : palette.text)
-            .frame(width: 28, height: 28)
+            .frame(width: StickyHeaderControlMetrics.height, height: StickyHeaderControlMetrics.height)
             .background(
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                RoundedRectangle(cornerRadius: StickyHeaderControlMetrics.cornerRadius, style: .continuous)
                     .fill(configuration.isPressed ? palette.controlPressedBackground : backgroundColor)
             )
     }
@@ -153,6 +158,30 @@ struct StickyTextButtonStyle: ButtonStyle {
             .background(
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
                     .fill(configuration.isPressed ? palette.controlPressedBackground : palette.controlBackground)
+            )
+    }
+}
+
+struct StickyHeaderChipButtonStyle: ButtonStyle {
+    let isCompact: Bool
+    var palette: AppTheme.Palette = AppTheme.yellow
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: isCompact ? 13 : 13.5, weight: .semibold))
+            .foregroundStyle(palette.text)
+            .padding(.horizontal, isCompact ? 9 : 11)
+            .frame(height: StickyHeaderControlMetrics.height)
+            .background(
+                RoundedRectangle(
+                    cornerRadius: StickyHeaderControlMetrics.cornerRadius,
+                    style: .continuous
+                )
+                .fill(
+                    configuration.isPressed
+                        ? palette.controlPressedBackground
+                        : palette.controlBackground
+                )
             )
     }
 }

@@ -1,6 +1,12 @@
 import Combine
 import Foundation
 
+enum HeaderReturnState: Equatable {
+    case none
+    case today
+    case searchOrigin(dateKey: String)
+}
+
 @MainActor
 final class AppState: ObservableObject {
     private enum SaveMode {
@@ -36,7 +42,7 @@ final class AppState: ObservableObject {
     }
 
     var currentShortDateTitle: String {
-        dateKeyService.shortDisplayTitle(for: currentDateKey)
+        dateKeyService.compactNavigationTitle(for: currentDateKey)
     }
 
     var isShowingToday: Bool {
@@ -47,30 +53,11 @@ final class AppState: ObservableObject {
         dataStore.dataFileURL.path
     }
 
-    var hasSearchReturnDestination: Bool {
-        searchReturnDateKey != nil && searchReturnDateKey != currentDateKey
-    }
-
-    var searchReturnDateTitle: String? {
-        searchReturnDateKey.map(dateKeyService.displayTitle)
-    }
-
-    var searchReturnCompactDateTitle: String? {
-        searchReturnDateKey.map(dateKeyService.compactDisplayTitle)
-    }
-
-    var searchReturnButtonTitle: String? {
-        guard let searchReturnDateKey else {
-            return nil
+    var headerReturnState: HeaderReturnState {
+        if let searchReturnDateKey, searchReturnDateKey != currentDateKey {
+            return .searchOrigin(dateKey: searchReturnDateKey)
         }
-        if searchReturnDateKey == dateKeyService.todayDateKey() {
-            return "Back to Today"
-        }
-        return "Back to \(dateKeyService.shortDisplayTitle(for: searchReturnDateKey))"
-    }
-
-    var searchReturnDayNumber: String? {
-        searchReturnDateKey.map(dateKeyService.dayNumber)
+        return isShowingToday ? .none : .today
     }
 
     var themePalette: AppTheme.Palette {
@@ -79,6 +66,14 @@ final class AppState: ObservableObject {
 
     func displayTitle(for dateKey: String) -> String {
         dateKeyService.displayTitle(for: dateKey)
+    }
+
+    func shortDisplayTitle(for dateKey: String) -> String {
+        dateKeyService.shortDisplayTitle(for: dateKey)
+    }
+
+    func accessibleShortDisplayTitle(for dateKey: String) -> String {
+        dateKeyService.accessibleShortDisplayTitle(for: dateKey)
     }
 
     init(
@@ -163,11 +158,14 @@ final class AppState: ObservableObject {
             return
         }
 
-        if dateKey != currentDateKey, searchReturnDateKey == nil {
+        let todayDateKey = dateKeyService.todayDateKey()
+        if dateKey != currentDateKey,
+           searchReturnDateKey == nil,
+           currentDateKey != todayDateKey {
             searchReturnDateKey = currentDateKey
         }
         isNoteSearchPresented = false
-        openDate(dateKey)
+        openDatePreservingSearchOrigin(dateKey)
     }
 
     func returnToSearchOrigin() {
@@ -176,7 +174,7 @@ final class AppState: ObservableObject {
         }
 
         searchReturnDateKey = nil
-        openDate(returnDateKey)
+        openDatePreservingSearchOrigin(returnDateKey)
     }
 
     func openDate(_ dateKey: String) {
@@ -184,10 +182,16 @@ final class AppState: ObservableObject {
             return
         }
 
-        currentDateKey = dateKey
-        if searchReturnDateKey == dateKey {
-            searchReturnDateKey = nil
+        searchReturnDateKey = nil
+        openDatePreservingSearchOrigin(dateKey)
+    }
+
+    private func openDatePreservingSearchOrigin(_ dateKey: String) {
+        guard dateKeyService.isValidDateKey(dateKey) else {
+            return
         }
+
+        currentDateKey = dateKey
 
         mutateData(saveMode: .immediate) { data in
             _ = dayPageController.ensurePage(dateKey: dateKey, in: &data)

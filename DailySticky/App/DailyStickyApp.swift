@@ -342,7 +342,11 @@ struct DailyStickyHelpView: View {
                     )
                     HelpLine(
                         "Back to today",
-                        detail: "The Back to Today control appears only when you are viewing another date."
+                        detail: "A Today button appears only when you are viewing another date."
+                    )
+                    HelpLine(
+                        "Return from search",
+                        detail: "After opening a search result, use the return-date button to go back to the day you searched from."
                     )
                     HelpLine(
                         "Pinned note",
