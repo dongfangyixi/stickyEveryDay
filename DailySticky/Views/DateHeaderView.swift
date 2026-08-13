@@ -20,7 +20,7 @@ struct DateHeaderView: View {
                         Image(systemName: "chevron.left")
                     }
                     .buttonStyle(StickyIconButtonStyle(palette: palette))
-                    .help("Previous day")
+                    .help(appState.localized("Previous day"))
 
                     Group {
                         if isCompact {
@@ -46,7 +46,7 @@ struct DateHeaderView: View {
                         Image(systemName: "chevron.right")
                     }
                     .buttonStyle(StickyIconButtonStyle(palette: palette))
-                    .help("Next day")
+                    .help(appState.localized("Next day"))
                 }
                 .layoutPriority(2)
 
@@ -69,8 +69,8 @@ struct DateHeaderView: View {
                             palette: palette
                         )
                     )
-                    .accessibilityLabel("Search notes")
-                    .help("Search notes")
+                    .accessibilityLabel(appState.localized("Search notes"))
+                    .help(appState.localized("Search notes"))
                     .background {
                         SearchPanelAnchorReader { screenRect in
                             onNoteSearchAnchorChange(screenRect)
@@ -98,12 +98,12 @@ struct DateHeaderView: View {
             Button {
                 appState.jumpToToday()
             } label: {
-                Text(String(localized: "Today"))
+                Text(appState.localized("Today"))
                     .fixedSize(horizontal: true, vertical: false)
             }
             .buttonStyle(StickyHeaderChipButtonStyle(isCompact: isCompact, palette: palette))
-            .accessibilityLabel("Back to today")
-            .help("Back to today")
+            .accessibilityLabel(appState.localized("Back to today"))
+            .help(appState.localized("Back to today"))
         case let .searchOrigin(dateKey):
             let shortTitle = appState.shortDisplayTitle(for: dateKey)
             let accessibleTitle = appState.accessibleShortDisplayTitle(for: dateKey)
@@ -119,8 +119,8 @@ struct DateHeaderView: View {
                 .fixedSize(horizontal: true, vertical: false)
             }
             .buttonStyle(StickyHeaderChipButtonStyle(isCompact: isCompact, palette: palette))
-            .accessibilityLabel("Return to \(accessibleTitle)")
-            .help("Return to \(shortTitle) — the day you searched from")
+            .accessibilityLabel(appState.language.returnAccessibilityLabel(date: accessibleTitle))
+            .help(appState.language.returnTooltip(date: shortTitle))
         }
     }
 }

@@ -35,6 +35,8 @@
 		A10000000000000000000020 /* NoteSearchEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000024 /* NoteSearchEngine.swift */; };
 		A10000000000000000000021 /* NoteSearchController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000025 /* NoteSearchController.swift */; };
 		A10000000000000000000022 /* NoteSearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000026 /* NoteSearchView.swift */; };
+		A10000000000000000000023 /* AppLanguage.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000027 /* AppLanguage.swift */; };
+		A10000000000000000000024 /* AppLanguage+Help.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000028 /* AppLanguage+Help.swift */; };
 		B10000000000000000000001 /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = B20000000000000000000001 /* Markdown */; };
 		C10000000000000000000001 /* CheckboxInteractionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000001 /* CheckboxInteractionTests.swift */; };
 		C10000000000000000000002 /* NoteSearchEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000003 /* NoteSearchEngineTests.swift */; };
@@ -85,6 +87,8 @@
 		A20000000000000000000024 /* NoteSearchEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteSearchEngine.swift; sourceTree = "<group>"; };
 		A20000000000000000000025 /* NoteSearchController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteSearchController.swift; sourceTree = "<group>"; };
 		A20000000000000000000026 /* NoteSearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteSearchView.swift; sourceTree = "<group>"; };
+		A20000000000000000000027 /* AppLanguage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLanguage.swift; sourceTree = "<group>"; };
+		A20000000000000000000028 /* AppLanguage+Help.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppLanguage+Help.swift"; sourceTree = "<group>"; };
 		C20000000000000000000001 /* CheckboxInteractionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CheckboxInteractionTests.swift; sourceTree = "<group>"; };
 		C20000000000000000000002 /* PinadayTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PinadayTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		C20000000000000000000003 /* NoteSearchEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteSearchEngineTests.swift; sourceTree = "<group>"; };
@@ -163,6 +167,8 @@
 				A20000000000000000000004 /* DayPage.swift */,
 				A20000000000000000000006 /* AppSettings.swift */,
 				A20000000000000000000007 /* StoredWindowFrame.swift */,
+				A20000000000000000000027 /* AppLanguage.swift */,
+				A20000000000000000000028 /* AppLanguage+Help.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -387,6 +393,8 @@
 				A10000000000000000000020 /* NoteSearchEngine.swift in Sources */,
 				A10000000000000000000021 /* NoteSearchController.swift in Sources */,
 				A10000000000000000000022 /* NoteSearchView.swift in Sources */,
+				A10000000000000000000023 /* AppLanguage.swift in Sources */,
+				A10000000000000000000024 /* AppLanguage+Help.swift in Sources */,
 				A1000000000000000000001B /* MarkdownTaskParser.swift in Sources */,
 				A1000000000000000000001D /* MarkdownInlineParser.swift in Sources */,
 				A10000000000000000000010 /* StickyWindowController.swift in Sources */,

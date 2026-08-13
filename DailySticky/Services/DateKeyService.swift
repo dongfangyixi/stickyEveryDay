@@ -2,18 +2,20 @@ import Foundation
 
 final class DateKeyService {
     private let calendar: Calendar
-    private let locale: Locale
+    private var locale: Locale
     private let dateKeyFormatter: DateFormatter
     private let displayDateFormatter: DateFormatter
     private let compactDisplayDateFormatter: DateFormatter
+    private let compactNavigationDateFormatter: DateFormatter
     private let shortDisplayDateFormatter: DateFormatter
+    private let accessibleShortDisplayDateFormatter: DateFormatter
 
     init(
         calendar: Calendar = .autoupdatingCurrent,
         locale: Locale = .autoupdatingCurrent
     ) {
         self.calendar = calendar
-        self.locale = locale
+        self.locale = Self.normalizedLocale(locale)
 
         let keyFormatter = DateFormatter()
         keyFormatter.calendar = calendar
@@ -24,24 +26,64 @@ final class DateKeyService {
 
         let displayFormatter = DateFormatter()
         displayFormatter.calendar = calendar
-        displayFormatter.locale = locale
+        displayFormatter.locale = self.locale
         displayFormatter.timeZone = calendar.timeZone
-        displayFormatter.dateFormat = "EEEE, MMMM d, yyyy"
+        displayFormatter.setLocalizedDateFormatFromTemplate("yMMMMEEEEd")
         self.displayDateFormatter = displayFormatter
 
         let compactDisplayFormatter = DateFormatter()
         compactDisplayFormatter.calendar = calendar
-        compactDisplayFormatter.locale = locale
+        compactDisplayFormatter.locale = self.locale
         compactDisplayFormatter.timeZone = calendar.timeZone
-        compactDisplayFormatter.dateFormat = "MMM d, yyyy"
+        compactDisplayFormatter.setLocalizedDateFormatFromTemplate("yMMMd")
         self.compactDisplayDateFormatter = compactDisplayFormatter
+
+        let compactNavigationFormatter = DateFormatter()
+        compactNavigationFormatter.calendar = calendar
+        compactNavigationFormatter.locale = self.locale
+        compactNavigationFormatter.timeZone = calendar.timeZone
+        compactNavigationFormatter.setLocalizedDateFormatFromTemplate("MMMdEEE")
+        self.compactNavigationDateFormatter = compactNavigationFormatter
 
         let shortDisplayFormatter = DateFormatter()
         shortDisplayFormatter.calendar = calendar
-        shortDisplayFormatter.locale = locale
+        shortDisplayFormatter.locale = self.locale
         shortDisplayFormatter.timeZone = calendar.timeZone
-        shortDisplayFormatter.dateFormat = "MMM d"
+        shortDisplayFormatter.setLocalizedDateFormatFromTemplate("MMMd")
         self.shortDisplayDateFormatter = shortDisplayFormatter
+
+        let accessibleShortDisplayFormatter = DateFormatter()
+        accessibleShortDisplayFormatter.calendar = calendar
+        accessibleShortDisplayFormatter.locale = self.locale
+        accessibleShortDisplayFormatter.timeZone = calendar.timeZone
+        accessibleShortDisplayFormatter.setLocalizedDateFormatFromTemplate("MMMMd")
+        self.accessibleShortDisplayDateFormatter = accessibleShortDisplayFormatter
+    }
+
+    func updateLocale(_ locale: Locale) {
+        let normalizedLocale = Self.normalizedLocale(locale)
+        guard normalizedLocale.identifier != self.locale.identifier else {
+            return
+        }
+
+        self.locale = normalizedLocale
+        displayDateFormatter.locale = normalizedLocale
+        displayDateFormatter.setLocalizedDateFormatFromTemplate("yMMMMEEEEd")
+        compactDisplayDateFormatter.locale = normalizedLocale
+        compactDisplayDateFormatter.setLocalizedDateFormatFromTemplate("yMMMd")
+        compactNavigationDateFormatter.locale = normalizedLocale
+        compactNavigationDateFormatter.setLocalizedDateFormatFromTemplate("MMMdEEE")
+        shortDisplayDateFormatter.locale = normalizedLocale
+        shortDisplayDateFormatter.setLocalizedDateFormatFromTemplate("MMMd")
+        accessibleShortDisplayDateFormatter.locale = normalizedLocale
+        accessibleShortDisplayDateFormatter.setLocalizedDateFormatFromTemplate("MMMMd")
+    }
+
+    private static func normalizedLocale(_ locale: Locale) -> Locale {
+        guard locale.language.languageCode?.identifier == "en" else {
+            return locale
+        }
+        return Locale(identifier: "en_US")
     }
 
     func todayDateKey() -> String {
@@ -96,16 +138,7 @@ final class DateKeyService {
             return dateKey
         }
 
-        var formatStyle = Date.FormatStyle()
-        formatStyle.calendar = calendar
-        formatStyle.locale = locale
-        formatStyle.timeZone = calendar.timeZone
-        return date.formatted(
-            formatStyle
-                .weekday(.abbreviated)
-                .month(.abbreviated)
-                .day()
-        )
+        return compactNavigationDateFormatter.string(from: date)
     }
 
     func shortDisplayTitle(for dateKey: String) -> String {
@@ -113,11 +146,7 @@ final class DateKeyService {
             return dateKey
         }
 
-        var formatStyle = Date.FormatStyle()
-        formatStyle.calendar = calendar
-        formatStyle.locale = locale
-        formatStyle.timeZone = calendar.timeZone
-        return date.formatted(formatStyle.month(.abbreviated).day())
+        return shortDisplayDateFormatter.string(from: date)
     }
 
     func accessibleShortDisplayTitle(for dateKey: String) -> String {
@@ -125,10 +154,6 @@ final class DateKeyService {
             return dateKey
         }
 
-        var formatStyle = Date.FormatStyle()
-        formatStyle.calendar = calendar
-        formatStyle.locale = locale
-        formatStyle.timeZone = calendar.timeZone
-        return date.formatted(formatStyle.month(.wide).day())
+        return accessibleShortDisplayDateFormatter.string(from: date)
     }
 }

@@ -67,7 +67,7 @@ final class NoteSearchEngineTests: XCTestCase {
         XCTAssertEqual(engine.documentCount, 1)
         XCTAssertEqual(engine.search("alpha").count, 1)
         XCTAssertEqual(engine.search("alpha").first?.matchingLineCount, 2)
-        XCTAssertEqual(engine.search("alpha").first?.matchCountLabel, "2 matches")
+        XCTAssertEqual(engine.search("alpha").first?.matchCountLabel(language: .english), "2 matches")
     }
 
     func testSingleMatchingLineUsesAnExplicitSingularCountLabel() {
@@ -78,7 +78,7 @@ final class NoteSearchEngineTests: XCTestCase {
         let result = engine.search("deploy").first
 
         XCTAssertEqual(result?.matchingLineCount, 1)
-        XCTAssertEqual(result?.matchCountLabel, "1 match")
+        XCTAssertEqual(result?.matchCountLabel(language: .english), "1 match")
     }
 
     func testResultLimitIsAppliedAfterRanking() {

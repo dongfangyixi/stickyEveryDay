@@ -10,8 +10,8 @@ struct NoteSearchDocument: Equatable {
 struct NoteSearchResult: Identifiable, Equatable {
     var id: String { dateKey }
 
-    var matchCountLabel: String {
-        matchingLineCount == 1 ? "1 match" : "\(matchingLineCount) matches"
+    func matchCountLabel(language: AppLanguage) -> String {
+        language.matchCount(matchingLineCount)
     }
 
     let dateKey: String

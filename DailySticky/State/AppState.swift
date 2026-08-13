@@ -18,6 +18,7 @@ final class AppState: ObservableObject {
     @Published private(set) var currentDateKey: String
     @Published private(set) var isPinned: Bool
     @Published private(set) var theme: AppThemeKind
+    @Published private(set) var language: AppLanguage
     @Published private(set) var noteOpacity: Double
     @Published private(set) var hasSeenWelcome: Bool
     @Published private(set) var isNoteSearchPresented = false
@@ -112,6 +113,7 @@ final class AppState: ObservableObject {
         self.currentDateKey = dateKeyToOpen
         self.isPinned = loadedData.settings.isPinned
         self.theme = loadedData.settings.theme
+        self.language = loadedData.settings.language
         self.noteOpacity = loadedData.settings.noteOpacity
         self.hasSeenWelcome = loadedData.settings.hasSeenWelcome
         self.lastErrorMessage = loadWarning
@@ -119,6 +121,7 @@ final class AppState: ObservableObject {
         self.dateKeyService = dateKeyService
         self.dayPageController = pageController
         self.autoSaveService = autoSaveService ?? AutoSaveService()
+        dateKeyService.updateLocale(loadedData.settings.language.locale)
 
         if shouldSaveAfterInit {
             saveImmediately()
@@ -223,6 +226,17 @@ final class AppState: ObservableObject {
         }
     }
 
+    func updateLanguage(_ language: AppLanguage) {
+        dateKeyService.updateLocale(language.locale)
+        mutateData(saveMode: .immediate) { data in
+            data.settings.language = language
+        }
+    }
+
+    func localized(_ key: String) -> String {
+        language.localized(key)
+    }
+
     func updateNoteOpacity(_ noteOpacity: Double) {
         mutateData(saveMode: .debounced) { data in
             data.settings.noteOpacity = AppSettings.clampedOpacity(noteOpacity)
@@ -254,6 +268,7 @@ final class AppState: ObservableObject {
         mutation(&data)
         isPinned = data.settings.isPinned
         theme = data.settings.theme
+        language = data.settings.language
         noteOpacity = data.settings.noteOpacity
         hasSeenWelcome = data.settings.hasSeenWelcome
 

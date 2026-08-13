@@ -321,13 +321,17 @@ final class NoteSearchFeatureTests: XCTestCase {
         XCTAssertEqual(appState.headerReturnState, .none)
     }
 
-    func testReturnChipDateUsesLocalizedMonthAndDayWithoutYear() {
+    func testReturnChipDateUsesUSMonthDayOrderWithoutYear() {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
 
         let englishService = DateKeyService(
             calendar: calendar,
             locale: Locale(identifier: "en_US")
+        )
+        let britishService = DateKeyService(
+            calendar: calendar,
+            locale: Locale(identifier: "en_GB")
         )
         let chineseService = DateKeyService(
             calendar: calendar,
@@ -339,17 +343,23 @@ final class NoteSearchFeatureTests: XCTestCase {
             englishService.accessibleShortDisplayTitle(for: "2026-08-12"),
             "August 12"
         )
-        XCTAssertEqual(chineseService.shortDisplayTitle(for: "2026-08-12"), "8月12日")
+        XCTAssertEqual(britishService.shortDisplayTitle(for: "2026-08-12"), "Aug 12")
+        XCTAssertEqual(
+            britishService.accessibleShortDisplayTitle(for: "2026-08-12"),
+            "August 12"
+        )
+        XCTAssertTrue(chineseService.shortDisplayTitle(for: "2026-08-12").contains("8月"))
+        XCTAssertTrue(chineseService.shortDisplayTitle(for: "2026-08-12").contains("12"))
         XCTAssertFalse(chineseService.shortDisplayTitle(for: "2026-08-12").contains("2026"))
     }
 
-    func testCompactNavigationDateKeepsLocalizedWeekdayAndDropsYear() {
+    func testAllHeaderDatesUseConsistentUSOrdering() {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
 
-        let englishService = DateKeyService(
+        let britishService = DateKeyService(
             calendar: calendar,
-            locale: Locale(identifier: "en_US")
+            locale: Locale(identifier: "en_GB")
         )
         let chineseService = DateKeyService(
             calendar: calendar,
@@ -357,16 +367,95 @@ final class NoteSearchFeatureTests: XCTestCase {
         )
 
         XCTAssertEqual(
-            englishService.compactNavigationTitle(for: "2026-08-12"),
+            britishService.displayTitle(for: "2026-08-12"),
+            "Wednesday, August 12, 2026"
+        )
+        XCTAssertEqual(
+            britishService.compactDisplayTitle(for: "2026-08-12"),
+            "Aug 12, 2026"
+        )
+        XCTAssertEqual(
+            britishService.compactNavigationTitle(for: "2026-08-12"),
             "Wed, Aug 12"
         )
         let chineseTitle = chineseService.compactNavigationTitle(for: "2026-08-12")
-        XCTAssertTrue(chineseTitle.contains("8月12日"))
+        XCTAssertTrue(chineseTitle.contains("8月"))
+        XCTAssertTrue(chineseTitle.contains("12"))
         XCTAssertTrue(chineseTitle.contains("周三"))
         XCTAssertFalse(chineseTitle.contains("2026"))
         XCTAssertFalse(
-            englishService.compactNavigationTitle(for: "2026-08-12").contains("2026")
+            britishService.compactNavigationTitle(for: "2026-08-12").contains("2026")
         )
+    }
+
+    func testEverySupportedLanguageHasCoreTranslationsAndLocalizedDateOrder() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+
+        for language in AppLanguage.allCases {
+            XCTAssertNotEqual(
+                language.localized("Settings"),
+                language == .english ? "" : "Settings",
+                "Missing Settings translation for \(language.rawValue)"
+            )
+            XCTAssertNotEqual(
+                language.localized("Search notes"),
+                language == .english ? "" : "Search notes",
+                "Missing search translation for \(language.rawValue)"
+            )
+
+            let service = DateKeyService(calendar: calendar, locale: language.locale)
+            let title = service.displayTitle(for: "2026-08-12")
+            XCTAssertTrue(title.contains("2026"))
+            XCTAssertTrue(title.contains("12"))
+        }
+
+        let english = DateKeyService(calendar: calendar, locale: AppLanguage.english.locale)
+        XCTAssertEqual(english.compactNavigationTitle(for: "2026-08-12"), "Wed, Aug 12")
+
+        let chinese = DateKeyService(
+            calendar: calendar,
+            locale: AppLanguage.simplifiedChinese.locale
+        )
+        XCTAssertTrue(chinese.compactNavigationTitle(for: "2026-08-12").contains("8月"))
+
+        let japanese = DateKeyService(calendar: calendar, locale: AppLanguage.japanese.locale)
+        XCTAssertTrue(japanese.shortDisplayTitle(for: "2026-08-12").contains("8月"))
+    }
+
+    func testLanguageSettingPersistsAndImmediatelyUpdatesDateFormatting() {
+        let appState = makeAppState(lastOpenedDateKey: "2026-08-10")
+
+        appState.updateLanguage(.french)
+
+        XCTAssertEqual(appState.language, .french)
+        XCTAssertEqual(appState.data.settings.language, .french)
+        XCTAssertEqual(appState.localized("Today"), "Aujourd’hui")
+        XCTAssertTrue(appState.currentDateTitle.localizedCaseInsensitiveContains("août"))
+    }
+
+    func testLegacySettingsWithoutLanguageDecodeAsEnglish() throws {
+        let json = """
+        {
+          "lastOpenedDateKey": "2026-08-12",
+          "isPinned": true,
+          "theme": "yellow",
+          "noteOpacity": 1,
+          "hasSeenWelcome": true
+        }
+        """
+
+        let settings = try JSONDecoder().decode(AppSettings.self, from: Data(json.utf8))
+        XCTAssertEqual(settings.language, .english)
+    }
+
+    func testLocalizedMatchCountsCoverSingularPluralAndCJK() {
+        XCTAssertEqual(AppLanguage.english.matchCount(1), "1 match")
+        XCTAssertEqual(AppLanguage.english.matchCount(3), "3 matches")
+        XCTAssertEqual(AppLanguage.french.matchCount(2), "2 résultats")
+        XCTAssertEqual(AppLanguage.simplifiedChinese.matchCount(3), "3 个匹配项")
+        XCTAssertEqual(AppLanguage.japanese.matchCount(2), "2 件一致")
+        XCTAssertEqual(AppLanguage.korean.matchCount(4), "4개 일치")
     }
 
     func testOpeningCurrentDateFromSearchDoesNotCreateReturnJourney() {

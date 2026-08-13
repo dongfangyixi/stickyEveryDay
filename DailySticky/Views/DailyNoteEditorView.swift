@@ -133,6 +133,7 @@ struct DailyNoteEditorView: View {
 
         InlineTodoTextEditor(
             palette: palette,
+            language: appState.language,
             dateKey: appState.currentDateKey,
             text: Binding(
                 get: {
@@ -154,6 +155,7 @@ struct DailyNoteEditorView: View {
 
 private struct InlineTodoTextEditor: NSViewRepresentable {
     var palette: AppTheme.Palette
+    var language: AppLanguage
     var dateKey: String
     @Binding var text: String
 
@@ -162,7 +164,11 @@ private struct InlineTodoTextEditor: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> InlineTodoTextEditorContainer {
-        let view = InlineTodoTextEditorContainer(palette: palette, dateKey: dateKey)
+        let view = InlineTodoTextEditorContainer(
+            palette: palette,
+            language: language,
+            dateKey: dateKey
+        )
         view.onTextChange = { [coordinator = context.coordinator] newText in
             coordinator.text.wrappedValue = newText
         }
@@ -173,6 +179,7 @@ private struct InlineTodoTextEditor: NSViewRepresentable {
     func updateNSView(_ nsView: InlineTodoTextEditorContainer, context: Context) {
         context.coordinator.text = $text
         nsView.setTheme(palette)
+        nsView.setLanguage(language)
         nsView.setDateKey(dateKey)
 
         guard nsView.canApplyExternalTextUpdate else {
@@ -493,28 +500,28 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         case codeBlock
         case divider
 
-        var title: String {
+        func title(language: AppLanguage) -> String {
             switch self {
             case .todo:
-                return "Todo list"
+                return language.localized("Todo list")
             case .heading1:
-                return "Heading 1"
+                return language.localized("Heading 1")
             case .heading2:
-                return "Heading 2"
+                return language.localized("Heading 2")
             case .heading3:
-                return "Heading 3"
+                return language.localized("Heading 3")
             case .heading4:
-                return "Heading 4"
+                return language.localized("Heading 4")
             case .bulletedList:
-                return "Bulleted list"
+                return language.localized("Bulleted list")
             case .numberedList:
-                return "Numbered list"
+                return language.localized("Numbered list")
             case .quote:
-                return "Quote"
+                return language.localized("Quote")
             case .codeBlock:
-                return "Code block"
+                return language.localized("Code block")
             case .divider:
-                return "Divider"
+                return language.localized("Divider")
             }
         }
 
@@ -568,7 +575,7 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             }
         }
 
-        func matches(query: String) -> Bool {
+        func matches(query: String, language: AppLanguage) -> Bool {
             let normalizedQuery = query
                 .trimmingCharacters(in: .whitespacesAndNewlines)
                 .lowercased()
@@ -604,7 +611,10 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
                 searchTerms = ["divider", "separator", "splitter", "spliter", "hr", "rule", "---"]
             }
 
-            return searchTerms.contains { $0.hasPrefix(normalizedQuery) }
+            return title(language: language)
+                .lowercased(with: language.locale)
+                .hasPrefix(normalizedQuery)
+                || searchTerms.contains { $0.hasPrefix(normalizedQuery) }
         }
     }
 
@@ -664,6 +674,7 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         "PinadayNumberedListPrefix"
     )
     private var palette: AppTheme.Palette
+    private var language: AppLanguage
     private var dateKey: String
     private var imageCache: [String: NSImage] = [:]
     private var selectedImageLineIndex: Int?
@@ -691,8 +702,14 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         !isComposingMarkedText
     }
 
-    init(frame frameRect: NSRect = .zero, palette: AppTheme.Palette = AppTheme.yellow, dateKey: String = "") {
+    init(
+        frame frameRect: NSRect = .zero,
+        palette: AppTheme.Palette = AppTheme.yellow,
+        language: AppLanguage = .english,
+        dateKey: String = ""
+    ) {
         self.palette = palette
+        self.language = language
         self.dateKey = dateKey
         super.init(frame: frameRect)
         configureViews()
@@ -700,6 +717,7 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
 
     required init?(coder: NSCoder) {
         self.palette = AppTheme.yellow
+        self.language = .english
         self.dateKey = ""
         super.init(coder: coder)
         configureViews()
@@ -724,6 +742,16 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         self.palette = palette
         applyTheme()
         refreshEditor()
+    }
+
+    func setLanguage(_ language: AppLanguage) {
+        guard self.language != language else {
+            return
+        }
+
+        self.language = language
+        imageInteractionView.language = language
+        configureSlashCommands()
     }
 
     func setDateKey(_ dateKey: String) {
@@ -1107,11 +1135,8 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         imageOverlayView.translatesAutoresizingMaskIntoConstraints = false
         imageInteractionView.translatesAutoresizingMaskIntoConstraints = false
         overlayView.translatesAutoresizingMaskIntoConstraints = false
-        slashPaletteView.configure(
-            commands: SlashCommand.allCases.map { command in
-                (title: command.title, syntaxHint: command.syntaxHint, rawValue: command.rawValue)
-            }
-        )
+        imageInteractionView.language = language
+        configureSlashCommands()
         slashPaletteView.onSelect = { [weak self] rawValue in
             guard let command = SlashCommand(rawValue: rawValue) else {
                 return
@@ -1163,6 +1188,18 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             selector: #selector(visibleBoundsChanged),
             name: NSView.boundsDidChangeNotification,
             object: scrollView.contentView
+        )
+    }
+
+    private func configureSlashCommands() {
+        slashPaletteView.configure(
+            commands: SlashCommand.allCases.map { command in
+                (
+                    title: command.title(language: language),
+                    syntaxHint: command.syntaxHint,
+                    rawValue: command.rawValue
+                )
+            }
         )
     }
 
@@ -1372,7 +1409,9 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         let matchingIndex: Int
         if normalizedQuery.isEmpty {
             matchingIndex = 0
-        } else if let index = commands.firstIndex(where: { $0.matches(query: normalizedQuery) }) {
+        } else if let index = commands.firstIndex(where: {
+            $0.matches(query: normalizedQuery, language: language)
+        }) {
             matchingIndex = index
         } else {
             hideSlashCommandPalette()
@@ -1551,7 +1590,9 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             return .todo
         }
 
-        return commands.first(where: { $0.matches(query: context.query) })
+        return commands.first(where: {
+            $0.matches(query: context.query, language: language)
+        })
     }
 
     private func codeLanguage(fromSlashQuery query: String) -> String? {
@@ -5812,6 +5853,13 @@ private final class MarkdownImageInteractionOverlayView: NSView {
     private var imageViews: [String: LiveTextImageView] = [:]
     private var items: [MarkdownImageOverlayItem] = []
     private var contextMenuItem: MarkdownImageOverlayItem?
+    var language: AppLanguage = .english {
+        didSet {
+            for imageView in imageViews.values {
+                imageView.language = language
+            }
+        }
+    }
     private var analysisGeneration = 0
 
     override var isFlipped: Bool {
@@ -5834,6 +5882,7 @@ private final class MarkdownImageInteractionOverlayView: NSView {
                 imageView = existing
             } else {
                 imageView = LiveTextImageView()
+                imageView.language = language
                 imageViews[key] = imageView
                 addSubview(imageView)
             }
@@ -5932,7 +5981,7 @@ private final class MarkdownImageInteractionOverlayView: NSView {
 
         let menu = NSMenu()
         let copyItem = NSMenuItem(
-            title: "Copy Image",
+            title: language.localized("Copy Image"),
             action: #selector(copyImageFromContextMenu(_:)),
             keyEquivalent: "c"
         )
@@ -6294,6 +6343,11 @@ private final class LiveTextImageView: NSView, ImageAnalysisOverlayViewDelegate,
     private var isImageSelected = false
     private var selectionAnchor: CharacterCaret?
     private var selectionRange: (lower: CharacterCaret, upper: CharacterCaret)?
+    var language: AppLanguage = .english {
+        didSet {
+            updateOCRButtonAppearance()
+        }
+    }
 
     override var isFlipped: Bool {
         true
@@ -6553,7 +6607,7 @@ private final class LiveTextImageView: NSView, ImageAnalysisOverlayViewDelegate,
     private func makeOCRButton() -> OCRHighlightButton {
         let image = NSImage(
             systemSymbolName: "text.viewfinder",
-            accessibilityDescription: "Show recognized text"
+            accessibilityDescription: language.localized("Show recognized text")
         )?.withSymbolConfiguration(
             NSImage.SymbolConfiguration(pointSize: 14, weight: .semibold)
         )
@@ -6572,8 +6626,9 @@ private final class LiveTextImageView: NSView, ImageAnalysisOverlayViewDelegate,
         button.layer?.shadowOpacity = 0.18
         button.layer?.shadowRadius = 2
         button.layer?.shadowOffset = NSSize(width: 0, height: -1)
-        button.setAccessibilityLabel("Show recognized text")
-        button.toolTip = "Show recognized text"
+        let title = language.localized("Show recognized text")
+        button.setAccessibilityLabel(title)
+        button.toolTip = title
         updateOCRButtonAppearance(button)
         return button
     }
@@ -6591,8 +6646,8 @@ private final class LiveTextImageView: NSView, ImageAnalysisOverlayViewDelegate,
     private func updateOCRButtonAppearance(_ button: OCRHighlightButton? = nil) {
         let button = button ?? ocrButton
         let title = button.state == .on
-            ? "Hide recognized text"
-            : "Show recognized text"
+            ? language.localized("Hide recognized text")
+            : language.localized("Show recognized text")
         button.setAccessibilityLabel(title)
         button.toolTip = title
 

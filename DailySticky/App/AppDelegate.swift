@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 @MainActor
@@ -12,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var noteSearchPanelController: NoteSearchPanelController?
     private var noteSearchAnchorScreenRect: NSRect?
     private var searchShortcutMonitor: Any?
+    private var languageCancellable: AnyCancellable?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
@@ -33,10 +35,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.stickyWindowController = stickyWindowController
         self.noteSearchPanelController = NoteSearchPanelController(appState: appState)
         AppRuntime.shared.appState = appState
+        AppRuntime.shared.language = appState.language
+        languageCancellable = appState.$language.sink { [weak self] language in
+            AppRuntime.shared.language = language
+            self?.refreshLocalizedWindowTitles(language: language)
+        }
         installSearchShortcutMonitor()
 
         stickyWindowController.show()
         showQuickStartIfNeeded()
+    }
+
+    private func refreshLocalizedWindowTitles(language: AppLanguage) {
+        aboutWindowController?.window?.title = language.localized("About Pinaday")
+        helpWindowController?.window?.title = language.localized("Pinaday Help")
+        quickStartWindowController?.window?.title = language.localized("Pinaday Quick Start")
+
+        DispatchQueue.main.async { [weak self] in
+            self?.noteSearchPanelController?.updateLanguage()
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -121,7 +138,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             backing: .buffered,
             defer: false
         )
-        window.title = "About Pinaday"
+        window.title = appState.localized("About Pinaday")
         window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(
             rootView: PinadayAboutView()
@@ -152,7 +169,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             backing: .buffered,
             defer: false
         )
-        window.title = "Pinaday Help"
+        window.title = appState.localized("Pinaday Help")
         window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(
             rootView: DailyStickyHelpView()
@@ -202,7 +219,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             backing: .buffered,
             defer: false
         )
-        window.title = "Pinaday Quick Start"
+        window.title = appState.localized("Pinaday Quick Start")
         window.backgroundColor = .clear
         window.hasShadow = true
         window.isMovableByWindowBackground = true
@@ -316,9 +333,9 @@ private struct PinadayQuickStartView: View {
 
         VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
-                Text("Pinaday basics")
+                Text(appState.localized("Pinaday basics"))
                     .font(.system(size: 19, weight: .semibold, design: .rounded))
-                Text("A few things to know for a smoother start.")
+                Text(appState.localized("A few things to know for a smoother start."))
                     .font(.system(size: 12))
                     .foregroundStyle(palette.secondaryText)
             }
@@ -334,7 +351,7 @@ private struct PinadayQuickStartView: View {
 
                 Spacer()
 
-                Button("Got it") {
+                Button(appState.localized("Got it")) {
                     onClose()
                 }
                 .buttonStyle(.borderedProminent)
@@ -388,13 +405,13 @@ private struct QuickStartSlashDemo: View {
         let palette = appState.themePalette
 
         VStack(alignment: .leading, spacing: 7) {
-            Text("Quick select with /")
+            Text(appState.localized("Quick select with /"))
                 .font(.system(size: 12, weight: .semibold))
 
             HStack(alignment: .center, spacing: 10) {
                 HStack(spacing: 7) {
                     DemoSlashKey()
-                    Text("Type / on an empty line to choose a format.")
+                    Text(appState.localized("Type / on an empty line to choose a format."))
                         .font(.system(size: 11))
                         .foregroundStyle(palette.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)
@@ -449,13 +466,13 @@ private struct QuickStartInstructionRow<Demo: View>: View {
         let palette = appState.themePalette
 
         VStack(alignment: .leading, spacing: 7) {
-            Text(title)
+            Text(appState.localized(title))
                 .font(.system(size: 12, weight: .semibold))
 
             demo
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            Text(detail)
+            Text(appState.localized(detail))
                 .font(.system(size: 11))
                 .foregroundStyle(palette.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
@@ -500,14 +517,20 @@ private struct QuickStartCheckboxToggle: View {
                 }
                 .frame(width: 14, height: 14)
 
-                Text("Don't show again")
+                Text(appState.localized("Don't show again"))
                     .font(.system(size: 12))
             }
             .foregroundStyle(palette.text)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help(isOn ? "Pinaday will not show this guide at launch." : "Show this guide again next launch.")
+        .help(
+            appState.localized(
+                isOn
+                    ? "Pinaday will not show this guide at launch."
+                    : "Show this guide again next launch."
+            )
+        )
     }
 }
 
@@ -537,7 +560,7 @@ private struct DemoTextButton: View {
     var body: some View {
         let palette = appState.themePalette
 
-        Text(title)
+        Text(appState.localized(title))
             .lineLimit(1)
         .font(.system(size: 11, weight: .semibold))
         .foregroundStyle(palette.text)
@@ -576,7 +599,7 @@ private struct DemoCommandChip: View {
         let palette = appState.themePalette
 
         HStack(spacing: 5) {
-            Text(title)
+            Text(appState.localized(title))
             Text(syntax)
                 .font(.system(size: 10, weight: .medium, design: .monospaced))
                 .foregroundStyle(palette.secondaryText)
@@ -600,7 +623,7 @@ private struct DemoMenuItem: View {
         let palette = appState.themePalette
 
         HStack(spacing: 6) {
-            Text(title)
+            Text(appState.localized(title))
                 .lineLimit(1)
             Spacer(minLength: 6)
             Text(syntax)

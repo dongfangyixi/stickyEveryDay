@@ -56,6 +56,10 @@ final class NoteSearchPanelController: NSObject, NSWindowDelegate {
         appState.dismissNoteSearch()
     }
 
+    func updateLanguage() {
+        panel?.title = appState.localized("Search Notes")
+    }
+
     func windowWillClose(_ notification: Notification) {
         searchController.releaseIndex()
         appState.dismissNoteSearch()
@@ -73,7 +77,7 @@ final class NoteSearchPanelController: NSObject, NSWindowDelegate {
         panel.becomesKeyOnlyIfNeeded = false
         panel.hidesOnDeactivate = false
         panel.level = .floating
-        panel.title = "Search Notes"
+        panel.title = appState.localized("Search Notes")
         panel.collectionBehavior = [.transient, .moveToActiveSpace]
         panel.backgroundColor = .clear
         panel.isOpaque = false
@@ -224,6 +228,7 @@ struct NoteSearchPanelView: View {
                     text: $controller.query,
                     isFocused: searchFieldIsFocused,
                     palette: palette,
+                    placeholder: appState.localized("Search notes"),
                     onMoveSelection: moveKeyboardSelection,
                     onSubmit: openSelectedResult,
                     onCancel: handleEscape
@@ -240,8 +245,8 @@ struct NoteSearchPanelView: View {
                     .buttonStyle(.plain)
                     .frame(width: 24, height: 24)
                     .contentShape(Rectangle())
-                    .help("Clear search")
-                    .accessibilityLabel("Clear search")
+                    .help(appState.localized("Clear search"))
+                    .accessibilityLabel(appState.localized("Clear search"))
                 }
             }
             .frame(height: 30)
@@ -273,13 +278,13 @@ struct NoteSearchPanelView: View {
         if controller.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             searchStatus(
                 icon: "magnifyingglass",
-                title: "Search notes",
+                title: appState.localized("Search notes"),
                 palette: palette
             )
         } else if controller.results.isEmpty {
             searchStatus(
                 icon: "text.magnifyingglass",
-                title: "No matching notes",
+                title: appState.localized("No matching notes"),
                 palette: palette
             )
         } else {
@@ -382,7 +387,7 @@ struct NoteSearchPanelView: View {
 
                 Spacer(minLength: 8)
 
-                Text(result.matchCountLabel)
+                Text(result.matchCountLabel(language: appState.language))
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(palette.secondaryText)
             }
@@ -538,6 +543,7 @@ private struct NoteSearchField: NSViewRepresentable {
     @Binding var text: String
     let isFocused: Bool
     let palette: AppTheme.Palette
+    let placeholder: String
     let onMoveSelection: (Int) -> Void
     let onSubmit: () -> Void
     let onCancel: () -> Void
@@ -567,7 +573,7 @@ private struct NoteSearchField: NSViewRepresentable {
         context.coordinator.parent = self
         field.textColor = palette.textNS
         field.placeholderAttributedString = NSAttributedString(
-            string: "Search notes",
+            string: placeholder,
             attributes: [.foregroundColor: palette.secondaryTextNS]
         )
         if field.stringValue != text {

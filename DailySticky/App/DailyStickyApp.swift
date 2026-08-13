@@ -6,6 +6,7 @@ final class AppRuntime: ObservableObject {
     static let shared = AppRuntime()
 
     @Published var appState: AppState?
+    @Published var language: AppLanguage = .english
 
     private init() {}
 }
@@ -30,24 +31,24 @@ struct DailyStickyApp: App {
         }
         .commands {
             CommandGroup(replacing: .appInfo) {
-                Button("About Pinaday") {
+                Button(localized("About Pinaday")) {
                     appDelegate.showAbout()
                 }
             }
 
-            CommandMenu("File") {
-                Button("Close Window") {
+            CommandMenu(localized("File")) {
+                Button(localized("Close Window")) {
                     appDelegate.closeActiveWindow()
                 }
                 .keyboardShortcut("w", modifiers: [.command])
             }
 
             CommandGroup(replacing: .help) {
-                Button("Pinaday Quick Start") {
+                Button(localized("Pinaday Quick Start")) {
                     appDelegate.showQuickStartGuide()
                 }
 
-                Button("Pinaday Help") {
+                Button(localized("Pinaday Help")) {
                     appDelegate.showHelp()
                 }
                 .keyboardShortcut("?", modifiers: [.command])
@@ -56,12 +57,16 @@ struct DailyStickyApp: App {
             CommandGroup(after: .textEditing) {
                 Divider()
 
-                Button("Search Notes") {
+                Button(localized("Search Notes")) {
                     appDelegate.showNoteSearch()
                 }
                 .keyboardShortcut("f", modifiers: [.command])
             }
         }
+    }
+
+    private func localized(_ key: String) -> String {
+        runtime.language.localized(key)
     }
 }
 
@@ -84,7 +89,7 @@ struct PinadayAboutView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Pinaday")
                         .font(.system(size: 26, weight: .semibold, design: .rounded))
-                    Text("A daily Markdown sticky note.")
+                    Text(appState.localized("A daily Markdown sticky note."))
                         .font(.system(size: 13))
                         .foregroundStyle(palette.secondaryText)
                     Text(versionText)
@@ -96,10 +101,10 @@ struct PinadayAboutView: View {
             Divider()
 
             VStack(alignment: .leading, spacing: 8) {
-                Label("Feedback", systemImage: "envelope")
+                Label(appState.localized("Feedback"), systemImage: "envelope")
                     .font(.system(size: 14, weight: .semibold))
 
-                Text("Found an issue or have an idea? Send a note directly to the developer.")
+                Text(appState.localized("Found an issue or have an idea? Send a note directly to the developer."))
                     .font(.system(size: 12))
                     .foregroundStyle(palette.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
@@ -108,7 +113,7 @@ struct PinadayAboutView: View {
                     Button {
                         sendFeedback()
                     } label: {
-                        Label("Send Feedback", systemImage: "paperplane.fill")
+                        Label(appState.localized("Send Feedback"), systemImage: "paperplane.fill")
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(palette.accent)
@@ -136,7 +141,8 @@ struct PinadayAboutView: View {
             forInfoDictionaryKey: "CFBundleVersion"
         ) as? String ?? ""
 
-        return build.isEmpty ? "Version \(version)" : "Version \(version) (\(build))"
+        let label = appState.localized("Version")
+        return build.isEmpty ? "\(label) \(version)" : "\(label) \(version) (\(build))"
     }
 
     private func sendFeedback() {
@@ -158,7 +164,7 @@ struct PinadayAboutView: View {
 private struct SettingsView: View {
     @EnvironmentObject private var appState: AppState
     @State private var opensAtLogin = LaunchAtLoginService.isEnabled
-    @State private var launchAtLoginMessage = LaunchAtLoginService.statusMessage
+    @State private var launchAtLoginMessage = ""
     @State private var launchAtLoginError: String?
 
     var body: some View {
@@ -166,11 +172,56 @@ private struct SettingsView: View {
         let opacityPercent = Int(round(appState.noteOpacity * 100))
 
         VStack(alignment: .leading, spacing: 18) {
-            Text("Settings")
+            Text(appState.localized("Settings"))
                 .font(.system(size: 20, weight: .semibold))
 
+            HStack(spacing: 14) {
+                Text(appState.localized("Language"))
+                    .font(.system(size: 13, weight: .semibold))
+
+                Spacer()
+
+                Menu {
+                    ForEach(AppLanguage.allCases) { language in
+                        Button {
+                            appState.updateLanguage(language)
+                        } label: {
+                            if language == appState.language {
+                                Label(language.displayName, systemImage: "checkmark")
+                            } else {
+                                Text(language.displayName)
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 8) {
+                        Text(appState.language.displayName)
+                            .lineLimit(1)
+
+                        Spacer(minLength: 8)
+
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.system(size: 10, weight: .semibold))
+                    }
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(palette.text)
+                    .padding(.horizontal, 10)
+                    .frame(width: 190, height: 28)
+                    .background(
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .fill(palette.controlBackground)
+                    )
+                    .contentShape(Rectangle())
+                }
+                .menuIndicator(.hidden)
+                .buttonStyle(.plain)
+                .accessibilityLabel(appState.localized("Language"))
+            }
+
+            Divider()
+
             VStack(alignment: .leading, spacing: 10) {
-                Text("Theme")
+                Text(appState.localized("Theme"))
                     .font(.system(size: 13, weight: .semibold))
 
                 HStack(spacing: 10) {
@@ -184,7 +235,7 @@ private struct SettingsView: View {
                             )
                         }
                         .buttonStyle(.plain)
-                        .help(theme.displayName)
+                        .help(appState.localized(theme.localizationKey))
                     }
                 }
             }
@@ -193,7 +244,7 @@ private struct SettingsView: View {
 
             VStack(alignment: .leading, spacing: 14) {
                 Toggle(
-                    "Keep sticky note above other windows",
+                    appState.localized("Keep sticky note above other windows"),
                     isOn: Binding(
                         get: { appState.isPinned },
                         set: { appState.updatePinned($0) }
@@ -203,7 +254,7 @@ private struct SettingsView: View {
 
                 VStack(alignment: .leading, spacing: 5) {
                     Toggle(
-                        "Open Pinaday at login",
+                        appState.localized("Open Pinaday at login"),
                         isOn: Binding(
                             get: { opensAtLogin },
                             set: { updateOpenAtLogin($0) }
@@ -219,7 +270,7 @@ private struct SettingsView: View {
 
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
-                        Text("Sticky note opacity")
+                        Text(appState.localized("Sticky note opacity"))
                             .font(.system(size: 13, weight: .semibold))
                         Spacer()
                         Text("\(opacityPercent)%")
@@ -245,11 +296,14 @@ private struct SettingsView: View {
         .onAppear {
             refreshOpenAtLoginState()
         }
+        .onChange(of: appState.language) { _ in
+            refreshOpenAtLoginState()
+        }
     }
 
     private func refreshOpenAtLoginState() {
         opensAtLogin = LaunchAtLoginService.isEnabled
-        launchAtLoginMessage = LaunchAtLoginService.statusMessage
+        launchAtLoginMessage = LaunchAtLoginService.statusMessage(language: appState.language)
         launchAtLoginError = nil
     }
 
@@ -257,11 +311,11 @@ private struct SettingsView: View {
         do {
             try LaunchAtLoginService.setEnabled(isEnabled)
             opensAtLogin = LaunchAtLoginService.isEnabled
-            launchAtLoginMessage = LaunchAtLoginService.statusMessage
+            launchAtLoginMessage = LaunchAtLoginService.statusMessage(language: appState.language)
             launchAtLoginError = nil
         } catch {
             opensAtLogin = LaunchAtLoginService.isEnabled
-            launchAtLoginMessage = LaunchAtLoginService.statusMessage
+            launchAtLoginMessage = LaunchAtLoginService.statusMessage(language: appState.language)
             launchAtLoginError = error.localizedDescription
         }
     }
@@ -270,6 +324,7 @@ private struct SettingsView: View {
 private struct ThemePreviewCard: View {
     let palette: AppTheme.Palette
     let isSelected: Bool
+    @EnvironmentObject private var appState: AppState
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -277,7 +332,7 @@ private struct ThemePreviewCard: View {
                 Circle()
                     .fill(palette.accent)
                     .frame(width: 9, height: 9)
-                Text(palette.kind.displayName)
+                Text(appState.localized(palette.kind.localizationKey))
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(palette.text)
             }
@@ -327,9 +382,9 @@ struct DailyStickyHelpView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Pinaday Help")
+                    Text(appState.localized("Pinaday Help"))
                         .font(.system(size: 24, weight: .semibold))
-                    Text("A daily Markdown sticky note with checkable tasks, pasted images, and one note per date.")
+                    Text(appState.localized("A daily Markdown sticky note with checkable tasks, pasted images, and one note per date."))
                         .font(.system(size: 13))
                         .foregroundStyle(palette.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)
@@ -512,18 +567,18 @@ private enum LaunchAtLoginService {
         SMAppService.mainApp.status == .enabled
     }
 
-    static var statusMessage: String {
+    static func statusMessage(language: AppLanguage) -> String {
         switch SMAppService.mainApp.status {
         case .enabled:
-            return "Pinaday will open automatically when you sign in."
+            return language.localized("Pinaday will open automatically when you sign in.")
         case .notRegistered:
-            return "Pinaday will stay closed until you open it."
+            return language.localized("Pinaday will stay closed until you open it.")
         case .requiresApproval:
-            return "Approve Pinaday in System Settings > General > Login Items."
+            return language.localized("Approve Pinaday in System Settings > General > Login Items.")
         case .notFound:
-            return "Open at login is not available for this build."
+            return language.localized("Open at login is not available for this build.")
         @unknown default:
-            return "Open at login status is unavailable."
+            return language.localized("Open at login status is unavailable.")
         }
     }
 
@@ -549,7 +604,7 @@ private struct HelpSection<Content: View>: View {
         let palette = appState.themePalette
 
         VStack(alignment: .leading, spacing: 10) {
-            Text(title)
+            Text(appState.localized(title))
                 .font(.system(size: 14, weight: .semibold))
             VStack(alignment: .leading, spacing: 8) {
                 content
@@ -585,10 +640,10 @@ private struct HelpLine: View {
 
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
-                Text(text)
+                Text(appState.localized(text))
                     .font(.system(size: 13, weight: .semibold))
                 if let detail {
-                    Text(detail)
+                    Text(appState.localized(detail))
                         .font(.system(size: 12))
                         .foregroundStyle(palette.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)

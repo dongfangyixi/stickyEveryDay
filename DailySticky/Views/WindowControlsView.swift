@@ -12,6 +12,8 @@ struct WindowControlsView: View {
             Image(systemName: appState.isPinned ? "pin.fill" : "pin")
         }
         .buttonStyle(StickyIconButtonStyle(isActive: appState.isPinned, palette: palette))
-        .help(appState.isPinned ? "Unpin window" : "Pin window")
+        .help(
+            appState.localized(appState.isPinned ? "Unpin window" : "Pin window")
+        )
     }
 }

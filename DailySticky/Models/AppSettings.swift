@@ -9,7 +9,7 @@ enum AppThemeKind: String, Codable, CaseIterable, Identifiable {
         rawValue
     }
 
-    var displayName: String {
+    var localizationKey: String {
         switch self {
         case .yellow:
             return "Yellow"
@@ -26,6 +26,7 @@ struct AppSettings: Codable, Equatable {
     var isPinned: Bool
     var windowFrame: StoredWindowFrame?
     var theme: AppThemeKind
+    var language: AppLanguage
     var noteOpacity: Double
     var hasSeenWelcome: Bool
 
@@ -34,6 +35,7 @@ struct AppSettings: Codable, Equatable {
         isPinned: Bool,
         windowFrame: StoredWindowFrame?,
         theme: AppThemeKind = .yellow,
+        language: AppLanguage = .english,
         noteOpacity: Double = 1.0,
         hasSeenWelcome: Bool = false
     ) {
@@ -41,6 +43,7 @@ struct AppSettings: Codable, Equatable {
         self.isPinned = isPinned
         self.windowFrame = windowFrame
         self.theme = theme
+        self.language = language
         self.noteOpacity = Self.clampedOpacity(noteOpacity)
         self.hasSeenWelcome = hasSeenWelcome
     }
@@ -50,6 +53,7 @@ struct AppSettings: Codable, Equatable {
         case isPinned
         case windowFrame
         case theme
+        case language
         case noteOpacity
         case hasSeenWelcome
     }
@@ -60,6 +64,7 @@ struct AppSettings: Codable, Equatable {
         isPinned = try container.decode(Bool.self, forKey: .isPinned)
         windowFrame = try container.decodeIfPresent(StoredWindowFrame.self, forKey: .windowFrame)
         theme = try container.decodeIfPresent(AppThemeKind.self, forKey: .theme) ?? .yellow
+        language = try container.decodeIfPresent(AppLanguage.self, forKey: .language) ?? .english
         noteOpacity = Self.clampedOpacity(
             try container.decodeIfPresent(Double.self, forKey: .noteOpacity) ?? 1.0
         )
