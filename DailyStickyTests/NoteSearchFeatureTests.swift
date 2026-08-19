@@ -388,6 +388,41 @@ final class NoteSearchFeatureTests: XCTestCase {
         )
     }
 
+    func testHeaderDateTiersReserveEnoughWidthForEverySupportedLanguage() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+
+        let representativeDateKeys = [
+            "2026-01-28",
+            "2026-02-18",
+            "2026-08-31",
+            "2026-09-30",
+            "2026-12-23"
+        ]
+
+        for language in AppLanguage.allCases {
+            let service = DateKeyService(calendar: calendar, locale: language.locale)
+            for dateKey in representativeDateKeys {
+                let titles: [(DateHeaderTitleTier, String)] = [
+                    (.full, service.displayTitle(for: dateKey)),
+                    (.compact, service.compactDisplayTitle(for: dateKey)),
+                    (.navigation, service.compactNavigationTitle(for: dateKey))
+                ]
+
+                for (tier, title) in titles {
+                    XCTAssertLessThanOrEqual(
+                        DateHeaderTitleMetrics.measuredWidth(of: title),
+                        DateHeaderTitleMetrics.reservedWidth(
+                            for: tier,
+                            locale: language.locale
+                        ),
+                        "\(language.rawValue) \(tier.rawValue) title exceeded its stable header width"
+                    )
+                }
+            }
+        }
+    }
+
     func testEverySupportedLanguageHasCoreTranslationsAndLocalizedDateOrder() {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!

@@ -186,6 +186,43 @@ struct StickyHeaderChipButtonStyle: ButtonStyle {
     }
 }
 
+struct SettingsActionButtonStyle: ButtonStyle {
+    let palette: AppTheme.Palette
+
+    func makeBody(configuration: Configuration) -> some View {
+        SettingsActionButtonBody(configuration: configuration, palette: palette)
+    }
+}
+
+private struct SettingsActionButtonBody: View {
+    @Environment(\.isEnabled) private var isEnabled
+
+    let configuration: ButtonStyle.Configuration
+    let palette: AppTheme.Palette
+
+    var body: some View {
+        configuration.label
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(isEnabled ? palette.text : palette.secondaryText)
+            .padding(.horizontal, 10)
+            .frame(height: 24)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(
+                        configuration.isPressed && isEnabled
+                            ? palette.controlPressedBackground
+                            : palette.controlBackground
+                    )
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .stroke(palette.separator, lineWidth: 1)
+            )
+            .contentShape(Rectangle())
+            .opacity(isEnabled ? 1 : 0.62)
+    }
+}
+
 struct SettingsSwitchToggleStyle: ToggleStyle {
     let palette: AppTheme.Palette
 

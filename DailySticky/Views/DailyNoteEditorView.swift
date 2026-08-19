@@ -1210,6 +1210,7 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         textView.typingAttributes = baseAttributes()
         overlayView.palette = palette
         imageOverlayView.palette = palette
+        imageInteractionView.palette = palette
         slashPaletteView.palette = palette
     }
 
@@ -5853,6 +5854,13 @@ private final class MarkdownImageInteractionOverlayView: NSView {
     private var imageViews: [String: LiveTextImageView] = [:]
     private var items: [MarkdownImageOverlayItem] = []
     private var contextMenuItem: MarkdownImageOverlayItem?
+    var palette: AppTheme.Palette = AppTheme.yellow {
+        didSet {
+            for imageView in imageViews.values {
+                imageView.palette = palette
+            }
+        }
+    }
     var language: AppLanguage = .english {
         didSet {
             for imageView in imageViews.values {
@@ -5882,6 +5890,7 @@ private final class MarkdownImageInteractionOverlayView: NSView {
                 imageView = existing
             } else {
                 imageView = LiveTextImageView()
+                imageView.palette = palette
                 imageView.language = language
                 imageViews[key] = imageView
                 addSubview(imageView)
@@ -6343,6 +6352,11 @@ private final class LiveTextImageView: NSView, ImageAnalysisOverlayViewDelegate,
     private var isImageSelected = false
     private var selectionAnchor: CharacterCaret?
     private var selectionRange: (lower: CharacterCaret, upper: CharacterCaret)?
+    var palette: AppTheme.Palette = AppTheme.yellow {
+        didSet {
+            updateOCRButtonAppearance()
+        }
+    }
     var language: AppLanguage = .english {
         didSet {
             updateOCRButtonAppearance()
@@ -6652,7 +6666,7 @@ private final class LiveTextImageView: NSView, ImageAnalysisOverlayViewDelegate,
         button.toolTip = title
 
         if button.state == .on {
-            button.layer?.backgroundColor = NSColor.controlAccentColor
+            button.layer?.backgroundColor = palette.accentNS
                 .withAlphaComponent(0.88)
                 .cgColor
             button.layer?.borderColor = NSColor.white.withAlphaComponent(0.72).cgColor

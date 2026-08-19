@@ -43,7 +43,10 @@ enum AppLanguage: String, Codable, CaseIterable, Identifiable {
     }
 
     func localized(_ key: String) -> String {
-        Self.translations[self]?[key] ?? Self.helpTranslations[self]?[key] ?? key
+        Self.translations[self]?[key]
+            ?? Self.cloudSyncTranslations[self]?[key]
+            ?? Self.helpTranslations[self]?[key]
+            ?? key
     }
 
     func matchCount(_ count: Int) -> String {

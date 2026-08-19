@@ -21,6 +21,9 @@ final class AppState: ObservableObject {
     @Published private(set) var language: AppLanguage
     @Published private(set) var noteOpacity: Double
     @Published private(set) var hasSeenWelcome: Bool
+    @Published private(set) var storageMode: StorageMode
+    @Published private(set) var hasChosenStorageMode: Bool
+    @Published private(set) var cloudSyncStatus: CloudSyncStatus
     @Published private(set) var isNoteSearchPresented = false
     @Published private(set) var searchReturnDateKey: String?
     @Published var lastErrorMessage: String?
@@ -29,6 +32,9 @@ final class AppState: ObservableObject {
     private let dateKeyService: DateKeyService
     private let dayPageController: DayPageController
     private let autoSaveService: AutoSaveService
+    private let cloudRefreshInterval: TimeInterval
+    private var cloudSyncCoordinator: CloudSyncCoordinator?
+    private var cloudRefreshTask: Task<Void, Never>?
 
     var currentPage: DayPage {
         data.pages[currentDateKey] ?? DayPage.empty(dateKey: currentDateKey)
@@ -81,7 +87,10 @@ final class AppState: ObservableObject {
         dataStore: AppDataStore,
         dateKeyService: DateKeyService,
         dayPageController: DayPageController? = nil,
-        autoSaveService: AutoSaveService? = nil
+        autoSaveService: AutoSaveService? = nil,
+        cloudSyncService: CloudSyncServicing? = nil,
+        cloudSyncMetadataStore: CloudSyncMetadataStore = CloudSyncMetadataStore(),
+        cloudRefreshInterval: TimeInterval = 20
     ) {
         let todayDateKey = dateKeyService.todayDateKey()
         let pageController = dayPageController ?? DayPageController(dateKeyService: dateKeyService)
@@ -116,15 +125,37 @@ final class AppState: ObservableObject {
         self.language = loadedData.settings.language
         self.noteOpacity = loadedData.settings.noteOpacity
         self.hasSeenWelcome = loadedData.settings.hasSeenWelcome
+        self.storageMode = loadedData.settings.storageMode
+        self.hasChosenStorageMode = loadedData.settings.hasChosenStorageMode
+        self.cloudSyncStatus = loadedData.settings.storageMode == .iCloud ? .checkingAccount : .localOnly
         self.lastErrorMessage = loadWarning
         self.dataStore = dataStore
         self.dateKeyService = dateKeyService
         self.dayPageController = pageController
         self.autoSaveService = autoSaveService ?? AutoSaveService()
+        self.cloudRefreshInterval = cloudRefreshInterval
+        if let cloudSyncService {
+            self.cloudSyncCoordinator = CloudSyncCoordinator(
+                service: cloudSyncService,
+                metadataStore: cloudSyncMetadataStore
+            )
+        }
         dateKeyService.updateLocale(loadedData.settings.language.locale)
+
+        cloudSyncCoordinator?.onStatusChange = { [weak self] status in
+            self?.cloudSyncStatus = status
+        }
+        cloudSyncCoordinator?.onResult = { [weak self] result, sourceSnapshot in
+            try self?.applyCloudSyncResult(result, sourceSnapshot: sourceSnapshot)
+        }
 
         if shouldSaveAfterInit {
             saveImmediately()
+        }
+
+        if storageMode == .iCloud, hasChosenStorageMode {
+            startCloudRefresh()
+            syncNow()
         }
     }
 
@@ -253,6 +284,56 @@ final class AppState: ObservableObject {
         }
     }
 
+    func chooseStorageMode(_ storageMode: StorageMode) {
+        let changed = data.settings.storageMode != storageMode
+            || !data.settings.hasChosenStorageMode
+        guard changed else {
+            if storageMode == .iCloud {
+                syncNow()
+            }
+            return
+        }
+
+        if storageMode == .localOnly {
+            stopCloudRefresh()
+            cloudSyncCoordinator?.disable()
+        }
+
+        mutateData(saveMode: .immediate) { data in
+            data.settings.storageMode = storageMode
+            data.settings.hasChosenStorageMode = true
+        }
+
+        if storageMode == .iCloud {
+            startCloudRefresh()
+            syncNow()
+        }
+    }
+
+    func syncNow() {
+        guard storageMode == .iCloud else {
+            cloudSyncStatus = .localOnly
+            return
+        }
+        guard let cloudSyncCoordinator else {
+            cloudSyncStatus = .capabilityUnavailable
+            return
+        }
+        cloudSyncCoordinator.synchronizeNow(snapshot: cloudSyncSnapshot())
+    }
+
+    func appDidBecomeActive() {
+        guard storageMode == .iCloud, hasChosenStorageMode else {
+            return
+        }
+        startCloudRefresh()
+        syncNow()
+    }
+
+    func appDidResignActive() {
+        stopCloudRefresh()
+    }
+
     func updateWindowFrame(_ frame: StoredWindowFrame) {
         data.settings.windowFrame = frame
         saveDebounced()
@@ -271,6 +352,8 @@ final class AppState: ObservableObject {
         language = data.settings.language
         noteOpacity = data.settings.noteOpacity
         hasSeenWelcome = data.settings.hasSeenWelcome
+        storageMode = data.settings.storageMode
+        hasChosenStorageMode = data.settings.hasChosenStorageMode
 
         switch saveMode {
         case .debounced:
@@ -290,8 +373,69 @@ final class AppState: ObservableObject {
         do {
             try dataStore.save(data)
             lastErrorMessage = nil
+            if storageMode == .iCloud {
+                cloudSyncCoordinator?.schedule(snapshot: cloudSyncSnapshot())
+            }
         } catch {
             lastErrorMessage = error.localizedDescription
+        }
+    }
+
+    private func cloudSyncSnapshot() -> CloudSyncSnapshot {
+        CloudSyncSnapshot(
+            pages: data.pages,
+            attachments: AttachmentStore.syncSnapshot()
+        )
+    }
+
+    private func startCloudRefresh() {
+        stopCloudRefresh()
+        guard cloudRefreshInterval > 0 else {
+            return
+        }
+
+        let delay = UInt64(cloudRefreshInterval * 1_000_000_000)
+        cloudRefreshTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(nanoseconds: delay)
+                } catch {
+                    return
+                }
+                guard let self,
+                      self.storageMode == .iCloud,
+                      self.hasChosenStorageMode
+                else {
+                    return
+                }
+                self.syncNow()
+            }
+        }
+    }
+
+    private func stopCloudRefresh() {
+        cloudRefreshTask?.cancel()
+        cloudRefreshTask = nil
+    }
+
+    private func applyCloudSyncResult(
+        _ result: CloudSyncResult,
+        sourceSnapshot: CloudSyncSnapshot
+    ) throws {
+        let reconciliation = SyncMergeEngine.reconcileChangesMadeDuringSync(
+            currentPages: data.pages,
+            synchronizedPages: result.pages,
+            sourcePages: sourceSnapshot.pages
+        )
+
+        objectWillChange.send()
+        data.pages = reconciliation.pages
+        _ = dayPageController.ensurePage(dateKey: currentDateKey, in: &data)
+        try dataStore.save(data)
+        lastErrorMessage = nil
+
+        if !reconciliation.dateKeysToUpload.isEmpty {
+            cloudSyncCoordinator?.schedule(snapshot: cloudSyncSnapshot())
         }
     }
 }

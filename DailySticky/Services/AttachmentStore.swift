@@ -42,6 +42,53 @@ enum AttachmentStore {
         }
     }
 
+    static func syncSnapshot() -> [CloudAttachment] {
+        guard let rootURL = try? appSupportDirectory().appendingPathComponent("attachments", isDirectory: true),
+              let enumerator = FileManager.default.enumerator(
+                at: rootURL,
+                includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey]
+              )
+        else {
+            return []
+        }
+
+        return enumerator.compactMap { item in
+            guard let fileURL = item as? URL,
+                  let values = try? fileURL.resourceValues(forKeys: [.contentModificationDateKey, .isRegularFileKey]),
+                  values.isRegularFile == true
+            else {
+                return nil
+            }
+
+            let relativeSuffix = String(fileURL.path.dropFirst(rootURL.path.count))
+                .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            return CloudAttachment(
+                relativePath: "attachments/\(relativeSuffix)",
+                fileURL: fileURL,
+                modifiedAt: values.contentModificationDate ?? .distantPast
+            )
+        }
+    }
+
+    static func importSyncedAttachment(from sourceURL: URL, relativePath: String) throws {
+        let normalizedPath = relativePath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard normalizedPath.hasPrefix("attachments/"),
+              !normalizedPath.contains("..")
+        else {
+            return
+        }
+
+        let destinationURL = try appSupportDirectory().appendingPathComponent(normalizedPath)
+        try FileManager.default.createDirectory(
+            at: destinationURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        guard !FileManager.default.fileExists(atPath: destinationURL.path) else {
+            return
+        }
+        try FileManager.default.copyItem(at: sourceURL, to: destinationURL)
+    }
+
     private static func appSupportDirectory() throws -> URL {
         let applicationSupportURL = FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)
