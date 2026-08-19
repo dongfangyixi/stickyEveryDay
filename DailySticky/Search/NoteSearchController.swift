@@ -11,6 +11,7 @@ final class NoteSearchController: ObservableObject {
     }
     @Published private(set) var results: [NoteSearchResult] = []
     @Published private(set) var selectedResultIndex = 0
+    @Published private(set) var isIndexingImageText = false
 
     private var engine = NoteSearchEngine()
 
@@ -28,6 +29,15 @@ final class NoteSearchController: ObservableObject {
     func rebuildIndex(with pages: [String: DayPage]) {
         engine.rebuild(with: pages)
         refreshResults()
+    }
+
+    func rebuildIndex(with documents: [NoteSearchDocument]) {
+        engine.rebuild(with: documents)
+        refreshResults()
+    }
+
+    func setIndexingImageText(_ isIndexing: Bool) {
+        isIndexingImageText = isIndexing
     }
 
     func reset() {
@@ -53,6 +63,7 @@ final class NoteSearchController: ObservableObject {
         engine.rebuild(with: [NoteSearchDocument]())
         results = []
         selectedResultIndex = 0
+        isIndexingImageText = false
     }
 
     @discardableResult

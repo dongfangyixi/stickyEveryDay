@@ -1,6 +1,5 @@
 import AppKit
 import SwiftUI
-import Vision
 import VisionKit
 
 private enum TodoLayout {
@@ -470,12 +469,6 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
 
             return result
         }
-    }
-
-    private struct MarkdownImageReference {
-        var altText: String
-        var path: String
-        var width: CGFloat?
     }
 
     private enum HorizontalMovementDirection {
@@ -4257,42 +4250,11 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     }
 
     private func imageReference(in lineText: String) -> MarkdownImageReference? {
-        let nsText = lineText as NSString
-        let fullRange = NSRange(location: 0, length: nsText.length)
-        guard let match = Self.markdownImageLineRegex.firstMatch(
-            in: lineText,
-            options: [],
-            range: fullRange
-        ),
-            match.numberOfRanges >= 3
-        else {
-            return nil
-        }
-
-        let width: CGFloat?
-        if match.numberOfRanges >= 4,
-           match.range(at: 3).location != NSNotFound {
-            width = CGFloat((nsText.substring(with: match.range(at: 3)) as NSString).doubleValue)
-        } else {
-            width = nil
-        }
-
-        return MarkdownImageReference(
-            altText: nsText.substring(with: match.range(at: 1)),
-            path: nsText.substring(with: match.range(at: 2)),
-            width: width
-        )
+        MarkdownImageReferenceParser.reference(in: lineText)
     }
 
     private func markdownImageLine(for reference: MarkdownImageReference, width: CGFloat?) -> String {
-        let widthSuffix: String
-        if let width {
-            widthSuffix = "{width=\(max(1, Int(round(width))))}"
-        } else {
-            widthSuffix = ""
-        }
-
-        return "![\(reference.altText)](\(reference.path))\(widthSuffix)"
+        MarkdownImageReferenceParser.markdownLine(for: reference, width: width)
     }
 
     private func image(for reference: MarkdownImageReference) -> NSImage? {
@@ -5062,9 +5024,6 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         pattern: #"^(\[(?:[ xX]?)\])[ \t]*(.*)$"#
     )
 
-    private static let markdownImageLineRegex = try! NSRegularExpression(
-        pattern: #"^!\[([^\]]*)\]\(([^)\s]+)\)(?:\{width=(\d+(?:\.\d+)?)\})?$"#
-    )
 }
 
 private final class SlashCommandPaletteView: NSView {
@@ -5835,12 +5794,6 @@ private final class MarkdownImageOverlayView: NSView {
     }
 }
 
-private struct OCRTextLine: Equatable, Sendable {
-    let text: String
-    let boundingBox: CGRect
-    let characterBoxes: [CGRect]
-}
-
 @MainActor
 private final class MarkdownImageInteractionOverlayView: NSView {
     var onSelectImage: ((MarkdownImageOverlayItem, NSEvent) -> Void)?
@@ -5849,7 +5802,7 @@ private final class MarkdownImageInteractionOverlayView: NSView {
 
     private let analyzer = ImageAnalyzer()
     private var analysisCache: [String: ImageAnalysis] = [:]
-    private var textLayoutCache: [String: [OCRTextLine]] = [:]
+    private var textLayoutCache: [String: [OCRTextObservation]] = [:]
     private var analysisTasks: [String: Task<Void, Never>] = [:]
     private var imageViews: [String: LiveTextImageView] = [:]
     private var items: [MarkdownImageOverlayItem] = []
@@ -6123,12 +6076,6 @@ private final class MarkdownImageInteractionOverlayView: NSView {
         let attachmentPath = item.attachmentPath
         let image = item.image
         let generation = analysisGeneration
-        var proposedRect = NSRect(origin: .zero, size: image.size)
-        let cgImage = image.cgImage(
-            forProposedRect: &proposedRect,
-            context: nil,
-            hints: nil
-        )
         analysisTasks[attachmentPath] = Task { [weak self] in
             guard let self else {
                 return
@@ -6141,7 +6088,9 @@ private final class MarkdownImageInteractionOverlayView: NSView {
                     orientation: .up,
                     configuration: configuration
                 )
-                let textLines = await Self.recognizedTextLines(in: cgImage)
+                let textLines = await ImageOCRRepository.shared.observations(
+                    for: attachmentPath
+                )
                 let analysis = try await analysisRequest
                 guard !Task.isCancelled else {
                     return
@@ -6170,59 +6119,6 @@ private final class MarkdownImageInteractionOverlayView: NSView {
         "\(item.attachmentPath)|\(item.lineIndex)"
     }
 
-    nonisolated private static func recognizedTextLines(
-        in image: CGImage?
-    ) async -> [OCRTextLine] {
-        guard let image else {
-            return []
-        }
-
-        return await Task.detached(priority: .utility) {
-            let request = VNRecognizeTextRequest()
-            request.recognitionLevel = .accurate
-            request.usesLanguageCorrection = true
-            request.automaticallyDetectsLanguage = true
-
-            do {
-                let handler = VNImageRequestHandler(cgImage: image, orientation: .up)
-                try handler.perform([request])
-                return (request.results ?? []).compactMap { observation in
-                    guard let candidate = observation.topCandidates(1).first else {
-                        return nil
-                    }
-
-                    let bounds = observation.boundingBox
-                    guard bounds.width > 0, bounds.height > 0 else {
-                        return nil
-                    }
-
-                    var characterBoxes: [CGRect] = []
-                    var index = candidate.string.startIndex
-                    while index < candidate.string.endIndex {
-                        let nextIndex = candidate.string.index(after: index)
-                        let characterBox: CGRect
-                        do {
-                            characterBox = try candidate.boundingBox(
-                                for: index..<nextIndex
-                            )?.boundingBox ?? .zero
-                        } catch {
-                            characterBox = .zero
-                        }
-                        characterBoxes.append(characterBox)
-                        index = nextIndex
-                    }
-
-                    return OCRTextLine(
-                        text: candidate.string,
-                        boundingBox: bounds,
-                        characterBoxes: characterBoxes
-                    )
-                }
-            } catch {
-                return []
-            }
-        }.value
-    }
 }
 
 @MainActor
@@ -6348,7 +6244,7 @@ private final class LiveTextImageView: NSView, ImageAnalysisOverlayViewDelegate,
     private let regionOverlay = OCRRegionOverlayView()
     private lazy var ocrButton = makeOCRButton()
     private var currentAnalysis: ImageAnalysis?
-    private var recognizedTextLines: [OCRTextLine] = []
+    private var recognizedTextLines: [OCRTextObservation] = []
     private var isImageSelected = false
     private var selectionAnchor: CharacterCaret?
     private var selectionRange: (lower: CharacterCaret, upper: CharacterCaret)?
@@ -6405,7 +6301,7 @@ private final class LiveTextImageView: NSView, ImageAnalysisOverlayViewDelegate,
         }
     }
 
-    func setAnalysis(_ analysis: ImageAnalysis?, textLines: [OCRTextLine]) {
+    func setAnalysis(_ analysis: ImageAnalysis?, textLines: [OCRTextObservation]) {
         if currentAnalysis == nil, analysis == nil, recognizedTextLines.isEmpty,
            textLines.isEmpty {
             return

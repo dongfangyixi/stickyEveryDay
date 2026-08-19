@@ -7,13 +7,19 @@ final class NoteSearchPanelController: NSObject, NSWindowDelegate {
 
     private let appState: AppState
     private let searchController = NoteSearchController()
+    private let ocrSearchIndexer: OCRSearchIndexer
     private var panel: NoteSearchPanel?
     private var anchorScreenRect: NSRect?
     private var outsideClickMonitor: Any?
     private var appResignObserver: NSObjectProtocol?
+    private var ocrIndexTask: Task<Void, Never>?
 
-    init(appState: AppState) {
+    init(
+        appState: AppState,
+        ocrSearchIndexer: OCRSearchIndexer = OCRSearchIndexer()
+    ) {
         self.appState = appState
+        self.ocrSearchIndexer = ocrSearchIndexer
         super.init()
         installDismissalObservers()
     }
@@ -33,6 +39,7 @@ final class NoteSearchPanelController: NSObject, NSWindowDelegate {
         if let appResignObserver {
             NotificationCenter.default.removeObserver(appResignObserver)
         }
+        ocrIndexTask?.cancel()
     }
 
     func show(relativeTo anchorScreenRect: NSRect?, noteWindowFrame: NSRect?) {
@@ -44,6 +51,7 @@ final class NoteSearchPanelController: NSObject, NSWindowDelegate {
         self.panel = panel
         searchController.reset()
         searchController.rebuildIndex(with: appState.data.pages)
+        beginOCRIndexing(pages: appState.data.pages)
         appState.presentNoteSearch()
         position(panel, noteWindowFrame: noteWindowFrame)
         panel.makeKeyAndOrderFront(nil)
@@ -52,6 +60,8 @@ final class NoteSearchPanelController: NSObject, NSWindowDelegate {
 
     func dismiss() {
         panel?.orderOut(nil)
+        ocrIndexTask?.cancel()
+        ocrIndexTask = nil
         searchController.releaseIndex()
         appState.dismissNoteSearch()
     }
@@ -61,6 +71,8 @@ final class NoteSearchPanelController: NSObject, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
+        ocrIndexTask?.cancel()
+        ocrIndexTask = nil
         searchController.releaseIndex()
         appState.dismissNoteSearch()
     }
@@ -103,6 +115,29 @@ final class NoteSearchPanelController: NSObject, NSWindowDelegate {
         hostingView.frame = NSRect(origin: .zero, size: Self.panelSize)
         panel.contentView = hostingView
         return panel
+    }
+
+    private func beginOCRIndexing(pages: [String: DayPage]) {
+        ocrIndexTask?.cancel()
+        let hasImages = pages.values.contains { page in
+            !MarkdownImageReferenceParser.references(in: page.noteText).isEmpty
+        }
+        guard hasImages else {
+            searchController.setIndexingImageText(false)
+            return
+        }
+
+        searchController.setIndexingImageText(true)
+        let indexer = ocrSearchIndexer
+        ocrIndexTask = Task { [weak self] in
+            let documents = await indexer.documents(for: pages)
+            guard let self, !Task.isCancelled else {
+                return
+            }
+            self.searchController.rebuildIndex(with: documents)
+            self.searchController.setIndexingImageText(false)
+            self.ocrIndexTask = nil
+        }
     }
 
     private func position(_ panel: NSPanel, noteWindowFrame: NSRect?) {
@@ -282,11 +317,19 @@ struct NoteSearchPanelView: View {
                 palette: palette
             )
         } else if controller.results.isEmpty {
-            searchStatus(
-                icon: "text.magnifyingglass",
-                title: appState.localized("No matching notes"),
-                palette: palette
-            )
+            if controller.isIndexingImageText {
+                searchStatus(
+                    icon: "text.viewfinder",
+                    title: appState.localized("Searching image text"),
+                    palette: palette
+                )
+            } else {
+                searchStatus(
+                    icon: "text.magnifyingglass",
+                    title: appState.localized("No matching notes"),
+                    palette: palette
+                )
+            }
         } else {
             ScrollViewReader { proxy in
                 ScrollView {
@@ -392,12 +435,21 @@ struct NoteSearchPanelView: View {
                     .foregroundStyle(palette.secondaryText)
             }
 
-            Text(result.snippet)
-                .font(.system(size: 12))
-                .foregroundStyle(isSelected ? palette.text : palette.secondaryText)
-                .lineLimit(2)
-                .multilineTextAlignment(.leading)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(alignment: .firstTextBaseline, spacing: 5) {
+                if case .image = result.source {
+                    Image(systemName: "text.viewfinder")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(palette.secondaryText)
+                        .accessibilityLabel(appState.localized("Image text"))
+                }
+
+                Text(result.snippet)
+                    .font(.system(size: 12))
+                    .foregroundStyle(isSelected ? palette.text : palette.secondaryText)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)

@@ -42,6 +42,10 @@ enum AttachmentStore {
         }
     }
 
+    static func ocrCacheURL() -> URL? {
+        try? appSupportDirectory().appendingPathComponent("ocr-text-cache.json")
+    }
+
     static func syncSnapshot() -> [CloudAttachment] {
         guard let rootURL = try? appSupportDirectory().appendingPathComponent("attachments", isDirectory: true),
               let enumerator = FileManager.default.enumerator(

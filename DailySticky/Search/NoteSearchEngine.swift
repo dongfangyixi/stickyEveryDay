@@ -1,10 +1,33 @@
 import Foundation
 import NaturalLanguage
 
-struct NoteSearchDocument: Equatable {
+enum NoteSearchLineSource: Equatable, Sendable {
+    case note
+    case image(attachmentPath: String)
+}
+
+struct NoteSearchSupplementalLine: Equatable, Sendable {
+    let text: String
+    let source: NoteSearchLineSource
+}
+
+struct NoteSearchDocument: Equatable, Sendable {
     let dateKey: String
     let text: String
     let updatedAt: Date
+    let supplementalLines: [NoteSearchSupplementalLine]
+
+    init(
+        dateKey: String,
+        text: String,
+        updatedAt: Date,
+        supplementalLines: [NoteSearchSupplementalLine] = []
+    ) {
+        self.dateKey = dateKey
+        self.text = text
+        self.updatedAt = updatedAt
+        self.supplementalLines = supplementalLines
+    }
 }
 
 struct NoteSearchResult: Identifiable, Equatable {
@@ -18,6 +41,7 @@ struct NoteSearchResult: Identifiable, Equatable {
     let snippet: String
     let score: Double
     let matchingLineCount: Int
+    let source: NoteSearchLineSource
 }
 
 struct NoteSearchEngine {
@@ -25,6 +49,7 @@ struct NoteSearchEngine {
         let displayText: String
         let normalizedText: String
         let tokens: [String]
+        let source: NoteSearchLineSource
     }
 
     private struct IndexedDocument {
@@ -104,7 +129,8 @@ struct NoteSearchEngine {
                 dateKey: document.dateKey,
                 snippet: bestLine.displayText,
                 score: documentScore,
-                matchingLineCount: matchingLineCount
+                matchingLineCount: matchingLineCount,
+                source: bestLine.source
             )
         }
         .sorted {
@@ -120,7 +146,7 @@ struct NoteSearchEngine {
     private static let minimumAcceptedScore = 0.61
 
     private static func indexDocument(_ document: NoteSearchDocument) -> IndexedDocument? {
-        let lines = document.text
+        let noteLines = document.text
             .components(separatedBy: .newlines)
             .compactMap { rawLine -> IndexedLine? in
                 let displayText = SearchTextNormalizer.displayText(from: rawLine)
@@ -132,9 +158,26 @@ struct NoteSearchEngine {
                 return IndexedLine(
                     displayText: displayText,
                     normalizedText: normalizedText,
-                    tokens: SearchTextNormalizer.tokens(in: normalizedText)
+                    tokens: SearchTextNormalizer.tokens(in: normalizedText),
+                    source: .note
                 )
             }
+
+        let supplementalLines = document.supplementalLines.compactMap { line -> IndexedLine? in
+            let displayText = line.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            let normalizedText = SearchTextNormalizer.normalize(displayText)
+            guard !normalizedText.isEmpty else {
+                return nil
+            }
+
+            return IndexedLine(
+                displayText: displayText,
+                normalizedText: normalizedText,
+                tokens: SearchTextNormalizer.tokens(in: normalizedText),
+                source: line.source
+            )
+        }
+        let lines = noteLines + supplementalLines
 
         guard !lines.isEmpty else {
             return nil
@@ -394,6 +437,9 @@ private enum SearchTextNormalizer {
 
     static func displayText(from rawLine: String) -> String {
         var text = rawLine.trimmingCharacters(in: .whitespaces)
+        if let image = MarkdownImageReferenceParser.reference(in: text) {
+            return image.altText.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
         text = stripBlockPrefix(from: text)
 
         for marker in ["**", "__", "~~", "`"] {
