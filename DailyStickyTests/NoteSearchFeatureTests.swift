@@ -433,11 +433,21 @@ final class NoteSearchFeatureTests: XCTestCase {
                 language == .english ? "" : "Settings",
                 "Missing Settings translation for \(language.rawValue)"
             )
-            XCTAssertNotEqual(
-                language.localized("Search notes"),
-                language == .english ? "" : "Search notes",
-                "Missing search translation for \(language.rawValue)"
-            )
+            for key in [
+                "Search notes",
+                "Go to Note",
+                "Go to note",
+                "Search notes or enter a date",
+                "No matching notes or dates",
+                "Empty note",
+                "Clear query"
+            ] {
+                XCTAssertNotEqual(
+                    language.localized(key),
+                    language == .english ? "" : key,
+                    "Missing \(key) translation for \(language.rawValue)"
+                )
+            }
 
             let service = DateKeyService(calendar: calendar, locale: language.locale)
             let title = service.displayTitle(for: "2026-08-12")
@@ -501,21 +511,81 @@ final class NoteSearchFeatureTests: XCTestCase {
         XCTAssertNil(appState.searchReturnDateKey)
     }
 
-    func testSearchShortcutRequiresCommandFWithoutExtraModifiers() {
+    func testOpeningContentSearchResultCreatesPreciseRevealRequest() {
+        let appState = makeAppState(lastOpenedDateKey: "2026-08-10")
+        let location = NoteSearchMatchLocation.note(range: NSRange(location: 4, length: 6))
+        let result = NoteSearchResult(
+            dateKey: "2026-08-09",
+            snippet: "deploy",
+            score: 1,
+            matchingLineCount: 1,
+            source: .note,
+            matchLocation: location
+        )
+
+        appState.openSearchResult(result, query: "deploy")
+
+        XCTAssertEqual(appState.currentDateKey, "2026-08-09")
+        XCTAssertEqual(appState.noteRevealRequest?.dateKey, "2026-08-09")
+        XCTAssertEqual(appState.noteRevealRequest?.query, "deploy")
+        XCTAssertEqual(appState.noteRevealRequest?.location, location)
+    }
+
+    func testDateNavigationResultDoesNotCreateRevealRequest() {
+        let appState = makeAppState(lastOpenedDateKey: "2026-08-10")
+        let result = NoteSearchResult(
+            dateKey: "2026-08-09",
+            snippet: "Sunday, August 9, 2026",
+            score: 1,
+            matchingLineCount: 0,
+            source: .note,
+            kind: .date
+        )
+
+        appState.openSearchResult(result, query: "Aug 9")
+
+        XCTAssertEqual(appState.currentDateKey, "2026-08-09")
+        XCTAssertNil(appState.noteRevealRequest)
+    }
+
+    func testManualNavigationAndEditingClearSearchRevealRequest() {
+        let appState = makeAppState(lastOpenedDateKey: "2026-08-10")
+        let result = NoteSearchResult(
+            dateKey: "2026-08-09",
+            snippet: "deploy",
+            score: 1,
+            matchingLineCount: 1,
+            source: .note,
+            matchLocation: .note(range: NSRange(location: 0, length: 6))
+        )
+
+        appState.openSearchResult(result, query: "deploy")
+        XCTAssertNotNil(appState.noteRevealRequest)
+
+        appState.updateNoteText("changed")
+        XCTAssertNil(appState.noteRevealRequest)
+
+        appState.openSearchResult(result, query: "deploy")
+        XCTAssertNotNil(appState.noteRevealRequest)
+        appState.goToPreviousDay()
+        XCTAssertNil(appState.noteRevealRequest)
+    }
+
+    func testCurrentNoteFindShortcutRequiresCommandFWithoutExtraModifiers() {
         XCTAssertTrue(
-            NoteSearchShortcut.matches(
+            CurrentNoteFindShortcut.matches(
                 charactersIgnoringModifiers: "f",
                 modifierFlags: .command
             )
         )
         XCTAssertFalse(
-            NoteSearchShortcut.matches(
+            CurrentNoteFindShortcut.matches(
                 charactersIgnoringModifiers: "f",
                 modifierFlags: [.command, .shift]
             )
         )
         XCTAssertFalse(
-            NoteSearchShortcut.matches(
+            CurrentNoteFindShortcut.matches(
                 charactersIgnoringModifiers: "f",
                 modifierFlags: []
             )

@@ -50,7 +50,10 @@ final class NoteSearchPanelController: NSObject, NSWindowDelegate {
         let panel = panel ?? makePanel()
         self.panel = panel
         searchController.reset()
-        searchController.rebuildIndex(with: appState.data.pages)
+        searchController.rebuildIndex(
+            with: appState.data.pages,
+            locale: appState.language.locale
+        )
         beginOCRIndexing(pages: appState.data.pages)
         appState.presentNoteSearch()
         position(panel, noteWindowFrame: noteWindowFrame)
@@ -67,7 +70,8 @@ final class NoteSearchPanelController: NSObject, NSWindowDelegate {
     }
 
     func updateLanguage() {
-        panel?.title = appState.localized("Search Notes")
+        panel?.title = appState.localized("Go to Note")
+        searchController.updateLocale(appState.language.locale)
     }
 
     func windowWillClose(_ notification: Notification) {
@@ -89,7 +93,7 @@ final class NoteSearchPanelController: NSObject, NSWindowDelegate {
         panel.becomesKeyOnlyIfNeeded = false
         panel.hidesOnDeactivate = false
         panel.level = .floating
-        panel.title = appState.localized("Search Notes")
+        panel.title = appState.localized("Go to Note")
         panel.collectionBehavior = [.transient, .moveToActiveSpace]
         panel.backgroundColor = .clear
         panel.isOpaque = false
@@ -103,7 +107,7 @@ final class NoteSearchPanelController: NSObject, NSWindowDelegate {
                     guard let self else {
                         return
                     }
-                    self.appState.openSearchResult(result.dateKey)
+                    self.appState.openSearchResult(result, query: self.searchController.query)
                     self.dismiss()
                 },
                 onDismiss: { [weak self] in
@@ -134,7 +138,10 @@ final class NoteSearchPanelController: NSObject, NSWindowDelegate {
             guard let self, !Task.isCancelled else {
                 return
             }
-            self.searchController.rebuildIndex(with: documents)
+            self.searchController.rebuildIndex(
+                with: documents,
+                locale: self.appState.language.locale
+            )
             self.searchController.setIndexingImageText(false)
             self.ocrIndexTask = nil
         }
@@ -240,7 +247,7 @@ struct NoteSearchPanelView: View {
     let onSelect: (NoteSearchResult) -> Void
     let onDismiss: () -> Void
 
-    @State private var searchFieldIsFocused = false
+    @State private var searchFieldFocusRequestID = UUID()
     @State private var resultFrames: [String: CGRect] = [:]
     @State private var resultsViewportFrame: CGRect = .zero
     @State private var keyboardScrollRequest: NoteSearchKeyboardScrollRequest?
@@ -259,13 +266,13 @@ struct NoteSearchPanelView: View {
                     .frame(width: 20, height: 20)
                     .accessibilityHidden(true)
 
-                NoteSearchField(
+                SearchQueryField(
                     text: $controller.query,
-                    isFocused: searchFieldIsFocused,
+                    focusRequestID: searchFieldFocusRequestID,
                     palette: palette,
-                    placeholder: appState.localized("Search notes"),
+                    placeholder: appState.localized("Search notes or enter a date"),
                     onMoveSelection: moveKeyboardSelection,
-                    onSubmit: openSelectedResult,
+                    onSubmit: { _ in openSelectedResult() },
                     onCancel: handleEscape
                 )
 
@@ -280,8 +287,8 @@ struct NoteSearchPanelView: View {
                     .buttonStyle(.plain)
                     .frame(width: 24, height: 24)
                     .contentShape(Rectangle())
-                    .help(appState.localized("Clear search"))
-                    .accessibilityLabel(appState.localized("Clear search"))
+                    .help(appState.localized("Clear query"))
+                    .accessibilityLabel(appState.localized("Clear query"))
                 }
             }
             .frame(height: 30)
@@ -302,9 +309,7 @@ struct NoteSearchPanelView: View {
         }
         .foregroundStyle(palette.text)
         .onAppear {
-            DispatchQueue.main.async {
-                searchFieldIsFocused = true
-            }
+            searchFieldFocusRequestID = UUID()
         }
     }
 
@@ -313,7 +318,7 @@ struct NoteSearchPanelView: View {
         if controller.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             searchStatus(
                 icon: "magnifyingglass",
-                title: appState.localized("Search notes"),
+                title: appState.localized("Go to note"),
                 palette: palette
             )
         } else if controller.results.isEmpty {
@@ -326,7 +331,7 @@ struct NoteSearchPanelView: View {
             } else {
                 searchStatus(
                     icon: "text.magnifyingglass",
-                    title: appState.localized("No matching notes"),
+                    title: appState.localized("No matching notes or dates"),
                     palette: palette
                 )
             }
@@ -430,9 +435,11 @@ struct NoteSearchPanelView: View {
 
                 Spacer(minLength: 8)
 
-                Text(result.matchCountLabel(language: appState.language))
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(palette.secondaryText)
+                if result.kind == .content {
+                    Text(result.matchCountLabel(language: appState.language))
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(palette.secondaryText)
+                }
             }
 
             HStack(alignment: .firstTextBaseline, spacing: 5) {
@@ -443,7 +450,11 @@ struct NoteSearchPanelView: View {
                         .accessibilityLabel(appState.localized("Image text"))
                 }
 
-                Text(result.snippet)
+                Text(
+                    result.snippet.isEmpty
+                        ? appState.localized("Empty note")
+                        : result.snippet
+                )
                     .font(.system(size: 12))
                     .foregroundStyle(isSelected ? palette.text : palette.secondaryText)
                     .lineLimit(2)
@@ -588,110 +599,5 @@ private struct NoteSearchViewportFrameKey: PreferenceKey {
 
     static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
         value = nextValue()
-    }
-}
-
-private struct NoteSearchField: NSViewRepresentable {
-    @Binding var text: String
-    let isFocused: Bool
-    let palette: AppTheme.Palette
-    let placeholder: String
-    let onMoveSelection: (Int) -> Void
-    let onSubmit: () -> Void
-    let onCancel: () -> Void
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(parent: self)
-    }
-
-    func makeNSView(context: Context) -> NSSearchField {
-        let field = NSSearchField()
-        field.delegate = context.coordinator
-        field.font = .systemFont(ofSize: 13)
-        field.focusRingType = .none
-        field.isBordered = false
-        field.drawsBackground = false
-        field.sendsSearchStringImmediately = true
-        field.sendsWholeSearchString = false
-        field.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        if let searchCell = field.cell as? NSSearchFieldCell {
-            searchCell.searchButtonCell = nil
-            searchCell.cancelButtonCell = nil
-        }
-        return field
-    }
-
-    func updateNSView(_ field: NSSearchField, context: Context) {
-        context.coordinator.parent = self
-        field.textColor = palette.textNS
-        field.placeholderAttributedString = NSAttributedString(
-            string: placeholder,
-            attributes: [.foregroundColor: palette.secondaryTextNS]
-        )
-        if field.stringValue != text {
-            field.stringValue = text
-        }
-
-        if isFocused, field.window?.firstResponder !== field.currentEditor() {
-            DispatchQueue.main.async {
-                field.window?.makeFirstResponder(field)
-            }
-        }
-    }
-
-    final class Coordinator: NSObject, NSSearchFieldDelegate {
-        var parent: NoteSearchField
-
-        init(parent: NoteSearchField) {
-            self.parent = parent
-        }
-
-        func controlTextDidChange(_ notification: Notification) {
-            guard let field = notification.object as? NSSearchField else {
-                return
-            }
-            parent.text = field.stringValue
-        }
-
-        func control(
-            _ control: NSControl,
-            textView: NSTextView,
-            doCommandBy commandSelector: Selector
-        ) -> Bool {
-            guard let command = NoteSearchFieldCommand.resolve(commandSelector) else {
-                return false
-            }
-
-            switch command {
-            case let .moveSelection(offset):
-                parent.onMoveSelection(offset)
-            case .submit:
-                parent.onSubmit()
-            case .cancel:
-                parent.onCancel()
-            }
-            return true
-        }
-    }
-}
-
-enum NoteSearchFieldCommand: Equatable {
-    case moveSelection(offset: Int)
-    case submit
-    case cancel
-
-    static func resolve(_ selector: Selector) -> NoteSearchFieldCommand? {
-        switch selector {
-        case #selector(NSResponder.moveDown(_:)):
-            return .moveSelection(offset: 1)
-        case #selector(NSResponder.moveUp(_:)):
-            return .moveSelection(offset: -1)
-        case #selector(NSResponder.insertNewline(_:)):
-            return .submit
-        case #selector(NSResponder.cancelOperation(_:)):
-            return .cancel
-        default:
-            return nil
-        }
     }
 }

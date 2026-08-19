@@ -17,10 +17,19 @@ struct OCRSearchIndexer: Sendable {
 
         return pages.values.map { page in
             let imageLines = MarkdownImageReferenceParser.references(in: page.noteText).flatMap { reference in
-                (imageTextByPath[reference.path] ?? []).map { text in
+                (imageTextByPath[reference.path] ?? []).enumerated().map { index, observation in
                     NoteSearchSupplementalLine(
-                        text: text,
-                        source: .image(attachmentPath: reference.path)
+                        text: observation.text,
+                        source: .image(attachmentPath: reference.path),
+                        location: .image(
+                            attachmentPath: reference.path,
+                            markdownRange: reference.markdownRange,
+                            observationIndex: index,
+                            characterRange: NSRange(
+                                location: 0,
+                                length: (observation.text as NSString).length
+                            )
+                        )
                     )
                 }
             }
@@ -33,8 +42,8 @@ struct OCRSearchIndexer: Sendable {
         }
     }
 
-    private func recognizedText(for paths: [String]) async -> [String: [String]] {
-        await withTaskGroup(of: (String, [String]).self) { group in
+    private func recognizedText(for paths: [String]) async -> [String: [OCRTextObservation]] {
+        await withTaskGroup(of: (String, [OCRTextObservation]).self) { group in
             var iterator = paths.makeIterator()
             let concurrentTaskLimit = min(3, paths.count)
 
@@ -45,7 +54,7 @@ struct OCRSearchIndexer: Sendable {
                 addTask(for: path, to: &group)
             }
 
-            var results: [String: [String]] = [:]
+            var results: [String: [OCRTextObservation]] = [:]
             while let (path, lines) = await group.next() {
                 results[path] = lines
                 if let nextPath = iterator.next() {
@@ -58,13 +67,12 @@ struct OCRSearchIndexer: Sendable {
 
     private func addTask(
         for path: String,
-        to group: inout TaskGroup<(String, [String])>
+        to group: inout TaskGroup<(String, [OCRTextObservation])>
     ) {
         let repository = self.repository
         group.addTask {
             let lines = await repository.observations(for: path)
-                .map(\.text)
-                .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+                .filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
             return (path, lines)
         }
     }

@@ -51,7 +51,8 @@ private enum MarkdownTableCellRenderer {
     static func attributedText(
         _ text: String,
         isHeader: Bool,
-        palette: AppTheme.Palette
+        palette: AppTheme.Palette,
+        searchHighlights: [TableSearchHighlight] = []
     ) -> NSAttributedString {
         let paragraphStyle = NSMutableParagraphStyle()
         paragraphStyle.lineBreakMode = .byCharWrapping
@@ -120,35 +121,77 @@ private enum MarkdownTableCellRenderer {
             }
         }
 
+        for highlight in searchHighlights
+            where highlight.characterRange.length > 0
+                && NSMaxRange(highlight.characterRange) <= attributed.length {
+            attributed.addAttribute(
+                .backgroundColor,
+                value: palette.accentNS.withAlphaComponent(
+                    highlight.isActive
+                        ? (palette.kind == .dark ? 0.58 : 0.42)
+                        : (palette.kind == .dark ? 0.28 : 0.20)
+                ),
+                range: highlight.characterRange
+            )
+        }
+
         return attributed
     }
 }
 
 struct DailyNoteEditorView: View {
     @EnvironmentObject private var appState: AppState
+    @ObservedObject var findController: CurrentNoteFindController
 
     var body: some View {
         let palette = appState.themePalette
 
-        InlineTodoTextEditor(
-            palette: palette,
-            language: appState.language,
-            dateKey: appState.currentDateKey,
-            text: Binding(
-                get: {
-                    appState.currentPage.noteText
-                },
-                set: { newValue in
-                    appState.updateNoteText(newValue)
-                }
+        VStack(spacing: 0) {
+            if findController.isPresented {
+                CurrentNoteFindBar(controller: findController)
+                    .environmentObject(appState)
+            }
+
+            InlineTodoTextEditor(
+                palette: palette,
+                language: appState.language,
+                dateKey: appState.currentDateKey,
+                findQuery: findController.query,
+                findMatches: findController.matches,
+                selectedFindMatchID: findController.selectedMatch?.id,
+                revealRequest: appState.noteRevealRequest,
+                text: Binding(
+                    get: {
+                        appState.currentPage.noteText
+                    },
+                    set: { newValue in
+                        appState.updateNoteText(newValue)
+                    }
+                )
             )
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(palette.paperInset.opacity(0.76))
+            )
+            .padding(.horizontal, 8)
+            .padding(.vertical, 10)
+        }
+        .onAppear {
+            updateFindDocument()
+        }
+        .onChange(of: appState.currentPage) { _ in
+            updateFindDocument()
+        }
+        .onChange(of: appState.language) { _ in
+            updateFindDocument()
+        }
+    }
+
+    private func updateFindDocument() {
+        findController.update(
+            page: appState.currentPage,
+            locale: appState.language.locale
         )
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(palette.paperInset.opacity(0.76))
-        )
-        .padding(.horizontal, 8)
-        .padding(.vertical, 10)
     }
 }
 
@@ -156,6 +199,10 @@ private struct InlineTodoTextEditor: NSViewRepresentable {
     var palette: AppTheme.Palette
     var language: AppLanguage
     var dateKey: String
+    var findQuery: String
+    var findMatches: [CurrentNoteFindMatch]
+    var selectedFindMatchID: String?
+    var revealRequest: NoteRevealRequest?
     @Binding var text: String
 
     func makeCoordinator() -> Coordinator {
@@ -172,6 +219,12 @@ private struct InlineTodoTextEditor: NSViewRepresentable {
             coordinator.text.wrappedValue = newText
         }
         view.setText(text)
+        view.setFindMatches(
+            query: findQuery,
+            matches: findMatches,
+            selectedMatchID: selectedFindMatchID
+        )
+        view.setRevealRequest(revealRequest)
         return view
     }
 
@@ -180,6 +233,12 @@ private struct InlineTodoTextEditor: NSViewRepresentable {
         nsView.setTheme(palette)
         nsView.setLanguage(language)
         nsView.setDateKey(dateKey)
+        nsView.setFindMatches(
+            query: findQuery,
+            matches: findMatches,
+            selectedMatchID: selectedFindMatchID
+        )
+        nsView.setRevealRequest(revealRequest)
 
         guard nsView.canApplyExternalTextUpdate else {
             return
@@ -656,6 +715,36 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         var replacement: String
     }
 
+    private struct SearchRangeSegment {
+        var sourceLineRange: NSRange
+        var sourceContentRange: NSRange
+        var sourceText: String
+        var displayContentRange: NSRange
+        var displayLineIndex: Int
+    }
+
+    private enum SearchDisplayTargetKind: Equatable {
+        case text
+        case table
+        case image
+    }
+
+    private struct SearchDisplayTarget {
+        var range: NSRange
+        var lineIndex: Int
+        var kind: SearchDisplayTargetKind
+    }
+
+    private struct SearchPresentationMap {
+        var segments: [SearchRangeSegment]
+        var tableRowLineIndices: Set<Int>
+    }
+
+    private struct MarkdownTableCellSource {
+        var text: String
+        var sourceRange: NSRange
+    }
+
     private let scrollView = NSScrollView()
     private let textView = TodoTextView()
     private let overlayView = TodoCheckboxOverlayView()
@@ -665,6 +754,9 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     private let baseFont = NSFont.systemFont(ofSize: 14)
     private static let numberedListPrefixAttribute = NSAttributedString.Key(
         "PinadayNumberedListPrefix"
+    )
+    private static let searchHighlightAttribute = NSAttributedString.Key(
+        "PinadaySearchHighlight"
     )
     private var palette: AppTheme.Palette
     private var language: AppLanguage
@@ -684,6 +776,13 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     private var isRefreshingSelectionDisplay = false
     private var slashCommandContext: SlashCommandContext?
     private var selectedSlashCommandIndex = 0
+    private var sourceMarkdownText = ""
+    private var findQuery = ""
+    private var findMatches: [CurrentNoteFindMatch] = []
+    private var selectedFindMatchID: String?
+    private var revealRequest: NoteRevealRequest?
+    private var lastRevealedFindMatchID: String?
+    private var lastHandledRevealRequestID: UUID?
 
     var onTextChange: ((String) -> Void)?
 
@@ -751,8 +850,49 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         if self.dateKey != dateKey {
             imageInteractionView.clearAnalysisCache()
             selectedImageLineIndex = nil
+            lastRevealedFindMatchID = nil
+            lastHandledRevealRequestID = nil
         }
         self.dateKey = dateKey
+    }
+
+    func setFindMatches(
+        query: String,
+        matches: [CurrentNoteFindMatch],
+        selectedMatchID: String?
+    ) {
+        guard findQuery != query
+                || findMatches != matches
+                || selectedFindMatchID != selectedMatchID
+        else {
+            return
+        }
+
+        let shouldReveal = selectedMatchID != nil
+            && selectedMatchID != lastRevealedFindMatchID
+        findQuery = query
+        findMatches = matches
+        self.selectedFindMatchID = selectedMatchID
+        applyDisplayAttributes()
+        refreshOverlay()
+
+        if shouldReveal {
+            revealSelectedFindMatchIfNeeded()
+        }
+    }
+
+    func setRevealRequest(_ request: NoteRevealRequest?) {
+        guard revealRequest != request else {
+            return
+        }
+
+        revealRequest = request
+        if request == nil {
+            lastHandledRevealRequestID = nil
+        }
+        applyDisplayAttributes()
+        refreshOverlay()
+        revealGlobalMatchIfNeeded()
     }
 
     deinit {
@@ -764,6 +904,7 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             return
         }
 
+        sourceMarkdownText = text
         lastAppliedImageLayoutWidth = nil
         lastAppliedTableLayoutWidth = nil
         clearEditorUndoHistory()
@@ -3032,6 +3173,69 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         textView.string
     }
 
+    func displayRangeForSearchTesting(_ location: NoteSearchMatchLocation) -> NSRange? {
+        displayTarget(for: location)?.range
+    }
+
+    func searchHighlightRangesForTesting(activeOnly: Bool = false) -> [NSRange] {
+        guard let textStorage = textView.textStorage, textStorage.length > 0 else {
+            return []
+        }
+
+        var ranges: [NSRange] = []
+        textStorage.enumerateAttribute(
+            Self.searchHighlightAttribute,
+            in: NSRange(location: 0, length: textStorage.length)
+        ) { value, range, _ in
+            guard let isActive = value as? Bool,
+                  !activeOnly || isActive
+            else {
+                return
+            }
+            ranges.append(range)
+        }
+        return ranges
+    }
+
+    func tableSearchHighlightSnapshotsForTesting() -> [TableSearchHighlightSnapshot] {
+        let map = searchPresentationMap()
+        let highlights = tableSearchHighlights(using: map)
+        return highlights.keys.sorted().flatMap { lineIndex -> [TableSearchHighlightSnapshot] in
+            guard let segment = map.segments.first(where: {
+                $0.displayLineIndex == lineIndex
+            }),
+            let cells = Self.parseMarkdownTableCellsWithRanges(
+                segment.sourceText,
+                lineLocation: segment.sourceLineRange.location
+            ) else {
+                return []
+            }
+
+            return (highlights[lineIndex] ?? []).compactMap { highlight in
+                guard cells.indices.contains(highlight.cellIndex) else {
+                    return nil
+                }
+                let cell = cells[highlight.cellIndex]
+                let nsText = cell.text as NSString
+                guard NSMaxRange(highlight.characterRange) <= nsText.length else {
+                    return nil
+                }
+                return TableSearchHighlightSnapshot(
+                    lineIndex: lineIndex,
+                    cellIndex: highlight.cellIndex,
+                    matchedText: nsText.substring(with: highlight.characterRange),
+                    isActive: highlight.isActive
+                )
+            }
+        }
+    }
+
+    func displayLineIndexForSearchTesting(
+        _ location: NoteSearchMatchLocation
+    ) -> Int? {
+        displayTarget(for: location)?.lineIndex
+    }
+
     func copySelectionForTesting() -> String? {
         guard copySelectionToPasteboard() else {
             return nil
@@ -3368,6 +3572,7 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     private func notifyTextChangedAndRefresh(scrollSelection: Bool) {
         reconcileLineKinds()
         updateTypingAttributesForCurrentSelection()
+        sourceMarkdownText = markdownText()
         applyDisplayAttributes()
 
         if scrollSelection {
@@ -3375,7 +3580,7 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         }
 
         refreshOverlay()
-        onTextChange?(markdownText())
+        onTextChange?(sourceMarkdownText)
     }
 
     private func refreshEditor() {
@@ -3383,6 +3588,8 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         updateTypingAttributesForCurrentSelection()
         applyDisplayAttributes()
         refreshOverlay()
+        revealSelectedFindMatchIfNeeded()
+        revealGlobalMatchIfNeeded()
     }
 
     private func isFullTextRange(_ range: NSRange) -> Bool {
@@ -3488,6 +3695,362 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         return .normal
     }
 
+    private func searchRangeSegments() -> [SearchRangeSegment] {
+        let sourceLines = sourceMarkdownLines()
+        let displayLines = lineInfos()
+        var segments: [SearchRangeSegment] = []
+        var displayLineIndex = 0
+        var activeTaskIndentColumns: Int?
+        var isInsideCodeBlock = false
+
+        for sourceLine in sourceLines {
+            let line = sourceLine.text
+
+            if Self.parseCodeFenceLine(line) != nil {
+                isInsideCodeBlock.toggle()
+                continue
+            }
+
+            guard displayLines.indices.contains(displayLineIndex) else {
+                break
+            }
+
+            let displayLine = displayLines[displayLineIndex]
+            let sourceLength = (line as NSString).length
+            let sourcePrefixLength: Int
+
+            if isInsideCodeBlock {
+                sourcePrefixLength = 0
+                activeTaskIndentColumns = nil
+            } else if Self.isHorizontalRuleLine(line) {
+                sourcePrefixLength = 0
+                activeTaskIndentColumns = nil
+            } else if let task = Self.parseTaskLine(line) {
+                sourcePrefixLength = max(0, sourceLength - (task.text as NSString).length)
+                activeTaskIndentColumns = task.indentColumns
+            } else if let bullet = Self.parseBulletLine(line) {
+                sourcePrefixLength = max(0, sourceLength - (bullet.text as NSString).length)
+                activeTaskIndentColumns = nil
+            } else if let numbered = Self.parseNumberedLine(line) {
+                sourcePrefixLength = max(0, sourceLength - (numbered.text as NSString).length)
+                activeTaskIndentColumns = nil
+            } else if let quote = Self.parseQuoteLine(line) {
+                sourcePrefixLength = max(0, sourceLength - (quote as NSString).length)
+                activeTaskIndentColumns = nil
+            } else if let indentColumns = activeTaskIndentColumns {
+                let continuationPrefix = String(repeating: " ", count: indentColumns + 6)
+                sourcePrefixLength = line.hasPrefix(continuationPrefix)
+                    ? (continuationPrefix as NSString).length
+                    : 0
+            } else {
+                sourcePrefixLength = 0
+                activeTaskIndentColumns = nil
+            }
+
+            segments.append(
+                SearchRangeSegment(
+                    sourceLineRange: sourceLine.range,
+                    sourceContentRange: NSRange(
+                        location: sourceLine.range.location + sourcePrefixLength,
+                        length: max(0, sourceLength - sourcePrefixLength)
+                    ),
+                    sourceText: line,
+                    displayContentRange: displayLine.contentRange,
+                    displayLineIndex: displayLineIndex
+                )
+            )
+            displayLineIndex += 1
+        }
+
+        return segments
+    }
+
+    private func sourceMarkdownLines() -> [(text: String, range: NSRange)] {
+        let lines = sourceMarkdownText.components(separatedBy: "\n")
+        var location = 0
+        return lines.enumerated().map { index, line in
+            let length = (line as NSString).length
+            defer { location += length + (index < lines.count - 1 ? 1 : 0) }
+            return (line, NSRange(location: location, length: length))
+        }
+    }
+
+    private func searchPresentationMap() -> SearchPresentationMap {
+        SearchPresentationMap(
+            segments: searchRangeSegments(),
+            tableRowLineIndices: Set(
+                markdownTableRenderBlocks().flatMap(\.rowLineIndices)
+            )
+        )
+    }
+
+    private func displayTarget(
+        for location: NoteSearchMatchLocation,
+        using map: SearchPresentationMap? = nil
+    ) -> SearchDisplayTarget? {
+        let map = map ?? searchPresentationMap()
+
+        switch location {
+        case .note(let sourceRange):
+            guard let segment = map.segments.first(where: {
+                $0.sourceLineRange.intersection(sourceRange) != nil
+                    || ($0.sourceLineRange.length == 0
+                        && $0.sourceLineRange.location == sourceRange.location)
+            }) else {
+                return nil
+            }
+
+            let kind: SearchDisplayTargetKind = map.tableRowLineIndices.contains(
+                segment.displayLineIndex
+            ) ? .table : .text
+
+            let sourceContentRange = segment.sourceContentRange
+            let displayContentRange = segment.displayContentRange
+            let isInsideContent = sourceRange.location >= sourceContentRange.location
+                && NSMaxRange(sourceRange) <= NSMaxRange(sourceContentRange)
+            let rangesHaveMatchingLengths = sourceContentRange.length == displayContentRange.length
+            if isInsideContent, rangesHaveMatchingLengths {
+                let offset = sourceRange.location - sourceContentRange.location
+                return SearchDisplayTarget(
+                    range: NSRange(
+                        location: displayContentRange.location + offset,
+                        length: min(sourceRange.length, max(0, displayContentRange.length - offset))
+                    ),
+                    lineIndex: segment.displayLineIndex,
+                    kind: kind
+                )
+            }
+
+            return SearchDisplayTarget(
+                range: displayContentRange,
+                lineIndex: segment.displayLineIndex,
+                kind: kind
+            )
+
+        case .image(_, let markdownRange, _, _):
+            guard let segment = map.segments.first(where: {
+                $0.sourceLineRange.intersection(markdownRange) != nil
+            }) else {
+                return nil
+            }
+            return SearchDisplayTarget(
+                range: segment.displayContentRange,
+                lineIndex: segment.displayLineIndex,
+                kind: .image
+            )
+        }
+    }
+
+    private func revealSelectedFindMatchIfNeeded() {
+        guard let selectedFindMatchID,
+              selectedFindMatchID != lastRevealedFindMatchID,
+              let match = findMatches.first(where: { $0.id == selectedFindMatchID }),
+              let target = displayTarget(for: match.location)
+        else {
+            return
+        }
+
+        revealDisplayTarget(target)
+        lastRevealedFindMatchID = selectedFindMatchID
+    }
+
+    private func revealGlobalMatchIfNeeded() {
+        guard let revealRequest,
+              revealRequest.dateKey == dateKey,
+              revealRequest.id != lastHandledRevealRequestID,
+              let target = displayTarget(for: revealRequest.location)
+        else {
+            return
+        }
+
+        revealDisplayTarget(target)
+        lastHandledRevealRequestID = revealRequest.id
+    }
+
+    private func revealDisplayTarget(_ target: SearchDisplayTarget) {
+        let selection = textView.selectedRange()
+        layoutSubtreeIfNeeded()
+        guard let layoutManager = textView.layoutManager,
+              let textContainer = textView.textContainer
+        else {
+            return
+        }
+        layoutManager.ensureLayout(for: textContainer)
+
+        switch target.kind {
+        case .text:
+            textView.scrollRangeToVisible(target.range)
+        case .table, .image:
+            let lines = lineInfos()
+            if lines.indices.contains(target.lineIndex),
+               var lineRect = lineFragmentRect(
+                   for: lines[target.lineIndex],
+                   layoutManager: layoutManager
+               ) {
+                lineRect.origin.x = 0
+                lineRect.origin.y += textView.textContainerOrigin.y
+                lineRect.size.width = max(textView.bounds.width, scrollView.contentView.bounds.width)
+                lineRect.size.height = max(lineRect.height, lineHeight())
+                textView.scrollToVisible(
+                    lineRect.insetBy(dx: 0, dy: -lineHeight() * 0.65)
+                )
+            } else {
+                textView.scrollRangeToVisible(target.range)
+            }
+        }
+        textView.setSelectedRange(selection)
+        refreshOverlay()
+    }
+
+    private func applySearchHighlights(to textStorage: NSTextStorage) {
+        let hasRelevantReveal = revealRequest?.dateKey == dateKey
+        guard !findMatches.isEmpty || hasRelevantReveal else {
+            return
+        }
+
+        let map = searchPresentationMap()
+        let inactiveColor = palette.accentNS.withAlphaComponent(
+            palette.kind == .dark ? 0.28 : 0.20
+        )
+        let activeColor = palette.accentNS.withAlphaComponent(
+            palette.kind == .dark ? 0.58 : 0.42
+        )
+
+        for match in findMatches {
+            guard case .note = match.location,
+                  let target = displayTarget(for: match.location, using: map),
+                  target.range.length > 0,
+                  NSMaxRange(target.range) <= textStorage.length
+            else {
+                continue
+            }
+            textStorage.addAttribute(
+                .backgroundColor,
+                value: match.id == selectedFindMatchID ? activeColor : inactiveColor,
+                range: target.range
+            )
+            textStorage.addAttribute(
+                Self.searchHighlightAttribute,
+                value: match.id == selectedFindMatchID,
+                range: target.range
+            )
+        }
+
+        if let revealRequest,
+           revealRequest.dateKey == dateKey,
+           case .note = revealRequest.location,
+           let target = displayTarget(for: revealRequest.location, using: map),
+           target.range.length > 0,
+           NSMaxRange(target.range) <= textStorage.length {
+            textStorage.addAttribute(
+                .backgroundColor,
+                value: activeColor,
+                range: target.range
+            )
+            textStorage.addAttribute(
+                Self.searchHighlightAttribute,
+                value: true,
+                range: target.range
+            )
+        }
+    }
+
+    private func imageSearchHighlights() -> [Int: [OCRSearchHighlight]] {
+        var highlights: [Int: [OCRSearchHighlight]] = [:]
+        let hasRelevantReveal = revealRequest?.dateKey == dateKey
+        guard !findMatches.isEmpty || hasRelevantReveal else {
+            return highlights
+        }
+
+        let map = searchPresentationMap()
+
+        for match in findMatches {
+            guard case let .image(_, _, observationIndex, characterRange) = match.location,
+                  let target = displayTarget(for: match.location, using: map)
+            else {
+                continue
+            }
+            highlights[target.lineIndex, default: []].append(
+                OCRSearchHighlight(
+                    observationIndex: observationIndex,
+                    characterRange: characterRange,
+                    isActive: match.id == selectedFindMatchID
+                )
+            )
+        }
+
+        if let revealRequest,
+           revealRequest.dateKey == dateKey,
+           case let .image(_, _, observationIndex, characterRange) = revealRequest.location,
+           let target = displayTarget(for: revealRequest.location, using: map) {
+            highlights[target.lineIndex, default: []].append(
+                OCRSearchHighlight(
+                    observationIndex: observationIndex,
+                    characterRange: characterRange,
+                    isActive: true
+                )
+            )
+        }
+
+        return highlights
+    }
+
+    private func tableSearchHighlights(
+        using map: SearchPresentationMap
+    ) -> [Int: [TableSearchHighlight]] {
+        var highlights: [Int: [TableSearchHighlight]] = [:]
+
+        func appendHighlight(
+            for location: NoteSearchMatchLocation,
+            isActive: Bool
+        ) {
+            guard case .note(let sourceRange) = location,
+                  let target = displayTarget(for: location, using: map),
+                  target.kind == .table,
+                  let segment = map.segments.first(where: {
+                      $0.displayLineIndex == target.lineIndex
+                          && $0.sourceLineRange.intersection(sourceRange) != nil
+                  }),
+                  let cells = Self.parseMarkdownTableCellsWithRanges(
+                      segment.sourceText,
+                      lineLocation: segment.sourceLineRange.location
+                  ),
+                  let cellIndex = cells.firstIndex(where: {
+                      sourceRange.location >= $0.sourceRange.location
+                          && NSMaxRange(sourceRange) <= NSMaxRange($0.sourceRange)
+                  })
+            else {
+                return
+            }
+
+            let cell = cells[cellIndex]
+            highlights[target.lineIndex, default: []].append(
+                TableSearchHighlight(
+                    cellIndex: cellIndex,
+                    characterRange: NSRange(
+                        location: sourceRange.location - cell.sourceRange.location,
+                        length: sourceRange.length
+                    ),
+                    isActive: isActive
+                )
+            )
+        }
+
+        for match in findMatches {
+            appendHighlight(
+                for: match.location,
+                isActive: match.id == selectedFindMatchID
+            )
+        }
+
+        if let revealRequest,
+           revealRequest.dateKey == dateKey {
+            appendHighlight(for: revealRequest.location, isActive: true)
+        }
+
+        return highlights
+    }
+
     private func refreshOverlay() {
         overlayView.setItems([])
         imageOverlayView.setItems([], caret: nil)
@@ -3497,6 +4060,7 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
               let textContainer = textView.textContainer
         else {
             imageInteractionView.setItems([])
+            imageInteractionView.setSearchHighlights([:])
             return
         }
 
@@ -3514,6 +4078,12 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             selectedRange: selectedRange,
             lineInfos: displayLineInfos
         )
+        let tableHighlights: [Int: [TableSearchHighlight]]
+        if !findMatches.isEmpty || revealRequest?.dateKey == dateKey {
+            tableHighlights = tableSearchHighlights(using: searchPresentationMap())
+        } else {
+            tableHighlights = [:]
+        }
         for block in markdownCodeRenderBlocks(lineInfos: displayLineInfos) {
             guard displayLineInfos.indices.contains(block.lineRange.lowerBound),
                   displayLineInfos.indices.contains(block.lineRange.upperBound - 1),
@@ -3647,7 +4217,8 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
                         kind: .tableRow(
                             isHeader: isHeader,
                             cells: Array(repeating: "", count: columnCount),
-                            rowIndex: 0
+                            rowIndex: 0,
+                            searchHighlights: []
                         ),
                         frame: NSRect(
                             x: max(0, textContainerOrigin.x - visibleBounds.origin.x),
@@ -3668,7 +4239,8 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
                         kind: .tableRow(
                             isHeader: renderedTableRow.isHeader,
                             cells: renderedTableRow.cells,
-                            rowIndex: renderedTableRow.rowIndex
+                            rowIndex: renderedTableRow.rowIndex,
+                            searchHighlights: tableHighlights[line.index] ?? []
                         ),
                         frame: NSRect(
                             x: max(0, textContainerOrigin.x - visibleBounds.origin.x),
@@ -3690,6 +4262,7 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         }
 
         imageInteractionView.setItems(imageItems)
+        imageInteractionView.setSearchHighlights(imageSearchHighlights())
         imageOverlayView.setItems(imageItems, caret: imageCaret)
         updateInsertionPointColor(showCustomImageCaret: imageCaret != nil)
         textView.imageCursorRects = imageInteractionView.imageFrameRects().map {
@@ -3930,6 +4503,8 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
                 )
             }
         }
+
+        applySearchHighlights(to: textStorage)
 
         textStorage.endEditing()
         textView.setSelectedRange(selectedRange)
@@ -4916,25 +5491,70 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     }
 
     private static func parseMarkdownTableRow(_ line: String) -> [String]? {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        guard trimmed.contains("|") else {
+        parseMarkdownTableCellsWithRanges(line, lineLocation: 0)?.map(\.text)
+    }
+
+    private static func parseMarkdownTableCellsWithRanges(
+        _ line: String,
+        lineLocation: Int
+    ) -> [MarkdownTableCellSource]? {
+        let nsLine = line as NSString
+        guard nsLine.range(of: "|").location != NSNotFound else {
             return nil
         }
 
-        var rawCells = trimmed.components(separatedBy: "|")
-        if rawCells.first?.trimmingCharacters(in: .whitespaces).isEmpty == true {
-            rawCells.removeFirst()
+        var rawRanges: [NSRange] = []
+        var segmentStart = 0
+        for location in 0..<nsLine.length where nsLine.character(at: location) == 124 {
+            rawRanges.append(
+                NSRange(location: segmentStart, length: location - segmentStart)
+            )
+            segmentStart = location + 1
         }
-        if rawCells.last?.trimmingCharacters(in: .whitespaces).isEmpty == true {
-            rawCells.removeLast()
+        rawRanges.append(
+            NSRange(location: segmentStart, length: nsLine.length - segmentStart)
+        )
+
+        func trimmedCell(in rawRange: NSRange) -> MarkdownTableCellSource {
+            let rawText = nsLine.substring(with: rawRange) as NSString
+            let nonWhitespace = CharacterSet.whitespaces.inverted
+            let firstContent = rawText.rangeOfCharacter(from: nonWhitespace)
+            guard firstContent.location != NSNotFound else {
+                return MarkdownTableCellSource(
+                    text: "",
+                    sourceRange: NSRange(
+                        location: lineLocation + rawRange.location,
+                        length: 0
+                    )
+                )
+            }
+
+            let lastContent = rawText.rangeOfCharacter(
+                from: nonWhitespace,
+                options: .backwards
+            )
+            let localRange = NSRange(
+                location: firstContent.location,
+                length: NSMaxRange(lastContent) - firstContent.location
+            )
+            return MarkdownTableCellSource(
+                text: rawText.substring(with: localRange),
+                sourceRange: NSRange(
+                    location: lineLocation + rawRange.location + localRange.location,
+                    length: localRange.length
+                )
+            )
         }
 
-        let cells = rawCells.map { $0.trimmingCharacters(in: .whitespaces) }
-        guard cells.count >= 2 else {
-            return nil
+        var cells = rawRanges.map(trimmedCell)
+        if cells.first?.text.isEmpty == true {
+            cells.removeFirst()
+        }
+        if cells.last?.text.isEmpty == true {
+            cells.removeLast()
         }
 
-        return cells
+        return cells.count >= 2 ? cells : nil
     }
 
     private static func isMarkdownTableSeparator(_ line: String, expectedColumnCount: Int) -> Bool {
@@ -5684,11 +6304,40 @@ private struct LineMarkerOverlayItem {
         case quote
         case codeBlock(language: String?)
         case horizontalRule
-        case tableRow(isHeader: Bool, cells: [String], rowIndex: Int)
+        case tableRow(
+            isHeader: Bool,
+            cells: [String],
+            rowIndex: Int,
+            searchHighlights: [TableSearchHighlight]
+        )
     }
 
     var kind: Kind
     var frame: NSRect
+}
+
+private struct TableSearchHighlight: Equatable {
+    var cellIndex: Int
+    var characterRange: NSRange
+    var isActive: Bool
+}
+
+struct TableSearchHighlightSnapshot: Equatable {
+    var lineIndex: Int
+    var cellIndex: Int
+    var matchedText: String
+    var isActive: Bool
+}
+
+private struct OCRSearchHighlight: Equatable {
+    var observationIndex: Int
+    var characterRange: NSRange
+    var isActive: Bool
+}
+
+private struct OCRSearchHighlightRect: Equatable {
+    var rect: NSRect
+    var isActive: Bool
 }
 
 private struct MarkdownImageOverlayItem {
@@ -5806,6 +6455,7 @@ private final class MarkdownImageInteractionOverlayView: NSView {
     private var analysisTasks: [String: Task<Void, Never>] = [:]
     private var imageViews: [String: LiveTextImageView] = [:]
     private var items: [MarkdownImageOverlayItem] = []
+    private var searchHighlightsByLineIndex: [Int: [OCRSearchHighlight]] = [:]
     private var contextMenuItem: MarkdownImageOverlayItem?
     var palette: AppTheme.Palette = AppTheme.yellow {
         didSet {
@@ -5852,6 +6502,9 @@ private final class MarkdownImageInteractionOverlayView: NSView {
             imageView.frame = item.frame
             imageView.setImage(item.image)
             imageView.setImageSelected(item.isSelected)
+            imageView.setSearchHighlights(
+                searchHighlightsByLineIndex[item.lineIndex] ?? []
+            )
 
             if let analysis = analysisCache[item.attachmentPath] {
                 imageView.setAnalysis(
@@ -5866,13 +6519,29 @@ private final class MarkdownImageInteractionOverlayView: NSView {
         window?.invalidateCursorRects(for: self)
     }
 
+    func setSearchHighlights(_ highlights: [Int: [OCRSearchHighlight]]) {
+        guard searchHighlightsByLineIndex != highlights else {
+            return
+        }
+
+        searchHighlightsByLineIndex = highlights
+        for item in items {
+            imageViews[viewKey(for: item)]?.setSearchHighlights(
+                highlights[item.lineIndex] ?? []
+            )
+        }
+    }
+
     func clearAnalysisCache() {
         analysisGeneration += 1
         analysisTasks.values.forEach { $0.cancel() }
         analysisTasks.removeAll()
         analysisCache.removeAll()
         textLayoutCache.removeAll()
-        imageViews.values.forEach { $0.setAnalysis(nil, textLines: []) }
+        imageViews.values.forEach {
+            $0.setAnalysis(nil, textLines: [])
+            $0.setSearchHighlights([])
+        }
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
@@ -6123,11 +6792,22 @@ private final class MarkdownImageInteractionOverlayView: NSView {
 
 @MainActor
 private final class OCRRegionOverlayView: NSView {
+    var palette: AppTheme.Palette = AppTheme.yellow {
+        didSet { needsDisplay = true }
+    }
+
     var regions: [CGRect] = [] {
         didSet { needsDisplay = true }
     }
 
     var selectionRects: [NSRect] = [] {
+        didSet {
+            updateVisibility()
+            needsDisplay = true
+        }
+    }
+
+    var searchHighlightRects: [OCRSearchHighlightRect] = [] {
         didSet {
             updateVisibility()
             needsDisplay = true
@@ -6160,6 +6840,23 @@ private final class OCRRegionOverlayView: NSView {
             path.fill()
         }
 
+        for highlight in searchHighlightRects {
+            let path = NSBezierPath(
+                roundedRect: highlight.rect.insetBy(dx: -0.75, dy: -0.75),
+                xRadius: 1.5,
+                yRadius: 1.5
+            )
+            palette.accentNS
+                .withAlphaComponent(highlight.isActive ? 0.56 : 0.28)
+                .setFill()
+            path.fill()
+            if highlight.isActive {
+                palette.accentNS.withAlphaComponent(0.88).setStroke()
+                path.lineWidth = 1
+                path.stroke()
+            }
+        }
+
         guard showsRegions, !imageRect.isEmpty else { return }
 
         for region in regions {
@@ -6182,7 +6879,9 @@ private final class OCRRegionOverlayView: NSView {
     }
 
     private func updateVisibility() {
-        isHidden = !showsRegions && selectionRects.isEmpty
+        isHidden = !showsRegions
+            && selectionRects.isEmpty
+            && searchHighlightRects.isEmpty
     }
 }
 
@@ -6245,11 +6944,13 @@ private final class LiveTextImageView: NSView, ImageAnalysisOverlayViewDelegate,
     private lazy var ocrButton = makeOCRButton()
     private var currentAnalysis: ImageAnalysis?
     private var recognizedTextLines: [OCRTextObservation] = []
+    private var searchHighlights: [OCRSearchHighlight] = []
     private var isImageSelected = false
     private var selectionAnchor: CharacterCaret?
     private var selectionRange: (lower: CharacterCaret, upper: CharacterCaret)?
     var palette: AppTheme.Palette = AppTheme.yellow {
         didSet {
+            regionOverlay.palette = palette
             updateOCRButtonAppearance()
         }
     }
@@ -6281,6 +6982,7 @@ private final class LiveTextImageView: NSView, ImageAnalysisOverlayViewDelegate,
         super.layout()
         regionOverlay.imageRect = displayedImageRect()
         updateSelectionOverlay()
+        updateSearchHighlightOverlay()
     }
 
     func setImage(_ image: NSImage) {
@@ -6324,9 +7026,19 @@ private final class LiveTextImageView: NSView, ImageAnalysisOverlayViewDelegate,
             ocrButton.state = .off
             regionOverlay.showsRegions = false
         }
+        updateSearchHighlightOverlay()
         if let superview {
             window?.invalidateCursorRects(for: superview)
         }
+    }
+
+    func setSearchHighlights(_ highlights: [OCRSearchHighlight]) {
+        guard searchHighlights != highlights else {
+            return
+        }
+
+        searchHighlights = highlights
+        updateSearchHighlightOverlay()
     }
 
     func interactionRegion(at point: NSPoint) -> InteractionRegion {
@@ -6489,6 +7201,7 @@ private final class LiveTextImageView: NSView, ImageAnalysisOverlayViewDelegate,
         analysisOverlay.trackingImageView = imageView
         analysisOverlay.isSupplementaryInterfaceHidden = true
         analysisOverlay.preferredInteractionTypes = []
+        regionOverlay.palette = palette
 
         addSubview(imageView)
         addSubview(analysisOverlay)
@@ -6760,6 +7473,44 @@ private final class LiveTextImageView: NSView, ImageAnalysisOverlayViewDelegate,
         regionOverlay.selectionRects = selectionRects
     }
 
+    private func updateSearchHighlightOverlay() {
+        var highlightRects: [OCRSearchHighlightRect] = []
+
+        for highlight in searchHighlights {
+            guard recognizedTextLines.indices.contains(highlight.observationIndex) else {
+                continue
+            }
+
+            let line = recognizedTextLines[highlight.observationIndex].text
+            guard let stringRange = Range(highlight.characterRange, in: line),
+                  let characterRects = characterRects(for: highlight.observationIndex)
+            else {
+                continue
+            }
+
+            let lowerOffset = line.distance(from: line.startIndex, to: stringRange.lowerBound)
+            let upperOffset = line.distance(from: line.startIndex, to: stringRange.upperBound)
+            guard lowerOffset < upperOffset,
+                  lowerOffset < characterRects.count
+            else {
+                continue
+            }
+
+            let boundedUpperOffset = min(upperOffset, characterRects.count)
+            guard var unionRect = characterRects[lowerOffset..<boundedUpperOffset].first else {
+                continue
+            }
+            for rect in characterRects[lowerOffset..<boundedUpperOffset].dropFirst() {
+                unionRect = unionRect.union(rect)
+            }
+            highlightRects.append(
+                OCRSearchHighlightRect(rect: unionRect, isActive: highlight.isActive)
+            )
+        }
+
+        regionOverlay.searchHighlightRects = highlightRects
+    }
+
     private func viewRect(for normalizedRect: CGRect) -> NSRect {
         let contentRect = displayedImageRect()
         return NSRect(
@@ -7022,7 +7773,7 @@ private final class TodoCheckboxOverlayView: NSView {
             palette.checkboxBorderNS.withAlphaComponent(0.55).setFill()
             NSBezierPath(roundedRect: line, xRadius: 0.75, yRadius: 0.75).fill()
 
-        case .tableRow(let isHeader, let cells, let rowIndex):
+        case .tableRow(let isHeader, let cells, let rowIndex, let searchHighlights):
             let columnCount = max(1, cells.count)
             let rowRect = item.frame.integral.insetBy(dx: 0, dy: 0)
             let rowPath = NSBezierPath(rect: rowRect)
@@ -7073,7 +7824,8 @@ private final class TodoCheckboxOverlayView: NSView {
                 MarkdownTableCellRenderer.attributedText(
                     cell,
                     isHeader: isHeader,
-                    palette: palette
+                    palette: palette,
+                    searchHighlights: searchHighlights.filter { $0.cellIndex == index }
                 ).draw(
                     with: cellRect,
                     options: [.usesLineFragmentOrigin, .usesFontLeading]

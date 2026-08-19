@@ -26,6 +26,7 @@ final class AppState: ObservableObject {
     @Published private(set) var cloudSyncStatus: CloudSyncStatus
     @Published private(set) var isNoteSearchPresented = false
     @Published private(set) var searchReturnDateKey: String?
+    @Published private(set) var noteRevealRequest: NoteRevealRequest?
     @Published var lastErrorMessage: String?
 
     private let dataStore: AppDataStore
@@ -199,7 +200,22 @@ final class AppState: ObservableObject {
             searchReturnDateKey = currentDateKey
         }
         isNoteSearchPresented = false
+        noteRevealRequest = nil
         openDatePreservingSearchOrigin(dateKey)
+    }
+
+    func openSearchResult(_ result: NoteSearchResult, query: String) {
+        openSearchResult(result.dateKey)
+        guard result.kind == .content,
+              let location = result.matchLocation
+        else {
+            return
+        }
+        noteRevealRequest = NoteRevealRequest(
+            dateKey: result.dateKey,
+            query: query,
+            location: location
+        )
     }
 
     func returnToSearchOrigin() {
@@ -208,6 +224,7 @@ final class AppState: ObservableObject {
         }
 
         searchReturnDateKey = nil
+        noteRevealRequest = nil
         openDatePreservingSearchOrigin(returnDateKey)
     }
 
@@ -217,6 +234,7 @@ final class AppState: ObservableObject {
         }
 
         searchReturnDateKey = nil
+        noteRevealRequest = nil
         openDatePreservingSearchOrigin(dateKey)
     }
 
@@ -234,6 +252,7 @@ final class AppState: ObservableObject {
     }
 
     func updateNoteText(_ noteText: String) {
+        noteRevealRequest = nil
         mutateData(saveMode: .debounced) { data in
             dayPageController.updateNoteText(noteText, dateKey: currentDateKey, in: &data)
         }

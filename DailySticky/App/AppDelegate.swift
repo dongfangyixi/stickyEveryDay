@@ -12,6 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var quickStartSettings: QuickStartSettings?
     private var storageChoiceWindowController: NSWindowController?
     private var noteSearchPanelController: NoteSearchPanelController?
+    private var currentNoteFindController: CurrentNoteFindController?
     private var noteSearchAnchorScreenRect: NSRect?
     private var searchShortcutMonitor: Any?
     private var languageCancellable: AnyCancellable?
@@ -26,8 +27,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             dateKeyService: dateKeyService,
             cloudSyncService: CloudKitSyncService()
         )
+        let currentNoteFindController = CurrentNoteFindController()
         let stickyWindowController = StickyWindowController(
             appState: appState,
+            currentNoteFindController: currentNoteFindController,
             onToggleNoteSearch: { [weak self] in
                 self?.toggleNoteSearch(anchorScreenRect: nil)
             },
@@ -39,6 +42,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.appState = appState
         self.stickyWindowController = stickyWindowController
         self.noteSearchPanelController = NoteSearchPanelController(appState: appState)
+        self.currentNoteFindController = currentNoteFindController
         AppRuntime.shared.appState = appState
         AppRuntime.shared.language = appState.language
         languageCancellable = appState.$language.sink { [weak self] language in
@@ -107,6 +111,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
     }
 
+    func showCurrentNoteFind() {
+        stickyWindowController?.show()
+        currentNoteFindController?.present()
+    }
+
     func toggleNoteSearch(anchorScreenRect: NSRect?) {
         if appState?.isNoteSearchPresented == true {
             dismissNoteSearch()
@@ -125,12 +134,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func installSearchShortcutMonitor() {
         searchShortcutMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard NoteSearchShortcut.matches(event) else {
-                return event
+            if CurrentNoteFindShortcut.matches(event) {
+                self?.showCurrentNoteFind()
+                return nil
             }
-
-            self?.showNoteSearch()
-            return nil
+            if GoToNoteShortcut.matches(event) {
+                self?.showNoteSearch()
+                return nil
+            }
+            return event
         }
     }
 
@@ -352,7 +364,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-enum NoteSearchShortcut {
+enum CurrentNoteFindShortcut {
     static func matches(_ event: NSEvent) -> Bool {
         matches(
             charactersIgnoringModifiers: event.charactersIgnoringModifiers,
@@ -366,6 +378,23 @@ enum NoteSearchShortcut {
     ) -> Bool {
         let relevantModifiers = modifierFlags.intersection(.deviceIndependentFlagsMask)
         return charactersIgnoringModifiers?.lowercased() == "f" && relevantModifiers == .command
+    }
+}
+
+enum GoToNoteShortcut {
+    static func matches(_ event: NSEvent) -> Bool {
+        matches(
+            charactersIgnoringModifiers: event.charactersIgnoringModifiers,
+            modifierFlags: event.modifierFlags
+        )
+    }
+
+    static func matches(
+        charactersIgnoringModifiers: String?,
+        modifierFlags: NSEvent.ModifierFlags
+    ) -> Bool {
+        let relevantModifiers = modifierFlags.intersection(.deviceIndependentFlagsMask)
+        return charactersIgnoringModifiers?.lowercased() == "p" && relevantModifiers == .command
     }
 }
 

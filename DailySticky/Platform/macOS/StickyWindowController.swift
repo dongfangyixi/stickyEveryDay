@@ -15,6 +15,7 @@ private final class StickyWindow: NSWindow {
 @MainActor
 final class StickyWindowController: NSObject, NSWindowDelegate {
     private let appState: AppState
+    private let currentNoteFindController: CurrentNoteFindController
     private let onToggleNoteSearch: () -> Void
     private let onNoteSearchAnchorChange: (NSRect) -> Void
     private var window: NSWindow?
@@ -22,10 +23,12 @@ final class StickyWindowController: NSObject, NSWindowDelegate {
 
     init(
         appState: AppState,
+        currentNoteFindController: CurrentNoteFindController,
         onToggleNoteSearch: @escaping () -> Void,
         onNoteSearchAnchorChange: @escaping (NSRect) -> Void
     ) {
         self.appState = appState
+        self.currentNoteFindController = currentNoteFindController
         self.onToggleNoteSearch = onToggleNoteSearch
         self.onNoteSearchAnchorChange = onNoteSearchAnchorChange
         super.init()
@@ -53,6 +56,7 @@ final class StickyWindowController: NSObject, NSWindowDelegate {
     private func makeWindow() -> NSWindow {
         let frame = WindowFrameStore.usableFrame(from: appState.data.settings.windowFrame)
         let rootView = StickyRootView(
+            currentNoteFindController: currentNoteFindController,
             onToggleNoteSearch: onToggleNoteSearch,
             onNoteSearchAnchorChange: onNoteSearchAnchorChange
         )

@@ -57,10 +57,15 @@ struct DailyStickyApp: App {
             CommandGroup(after: .textEditing) {
                 Divider()
 
-                Button(localized("Search Notes")) {
-                    appDelegate.showNoteSearch()
+                Button(localized("Find in Note")) {
+                    appDelegate.showCurrentNoteFind()
                 }
                 .keyboardShortcut("f", modifiers: [.command])
+
+                Button(localized("Go to Note")) {
+                    appDelegate.showNoteSearch()
+                }
+                .keyboardShortcut("p", modifiers: [.command])
             }
         }
     }

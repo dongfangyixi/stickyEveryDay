@@ -76,8 +76,8 @@ struct DateHeaderView: View {
                             palette: palette
                         )
                     )
-                    .accessibilityLabel(appState.localized("Search notes"))
-                    .help(appState.localized("Search notes"))
+                    .accessibilityLabel(appState.localized("Go to note"))
+                    .help(appState.localized("Go to note"))
                     .background {
                         SearchPanelAnchorReader { screenRect in
                             onNoteSearchAnchorChange(screenRect)

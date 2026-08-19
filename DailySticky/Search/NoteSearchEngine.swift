@@ -9,6 +9,17 @@ enum NoteSearchLineSource: Equatable, Sendable {
 struct NoteSearchSupplementalLine: Equatable, Sendable {
     let text: String
     let source: NoteSearchLineSource
+    let location: NoteSearchMatchLocation?
+
+    init(
+        text: String,
+        source: NoteSearchLineSource,
+        location: NoteSearchMatchLocation? = nil
+    ) {
+        self.text = text
+        self.source = source
+        self.location = location
+    }
 }
 
 struct NoteSearchDocument: Equatable, Sendable {
@@ -30,6 +41,11 @@ struct NoteSearchDocument: Equatable, Sendable {
     }
 }
 
+enum NoteSearchResultKind: Equatable, Sendable {
+    case content
+    case date
+}
+
 struct NoteSearchResult: Identifiable, Equatable {
     var id: String { dateKey }
 
@@ -42,14 +58,36 @@ struct NoteSearchResult: Identifiable, Equatable {
     let score: Double
     let matchingLineCount: Int
     let source: NoteSearchLineSource
+    let kind: NoteSearchResultKind
+    let matchLocation: NoteSearchMatchLocation?
+
+    init(
+        dateKey: String,
+        snippet: String,
+        score: Double,
+        matchingLineCount: Int,
+        source: NoteSearchLineSource,
+        kind: NoteSearchResultKind = .content,
+        matchLocation: NoteSearchMatchLocation? = nil
+    ) {
+        self.dateKey = dateKey
+        self.snippet = snippet
+        self.score = score
+        self.matchingLineCount = matchingLineCount
+        self.source = source
+        self.kind = kind
+        self.matchLocation = matchLocation
+    }
 }
 
 struct NoteSearchEngine {
     private struct IndexedLine {
+        let rawText: String
         let displayText: String
         let normalizedText: String
         let tokens: [String]
         let source: NoteSearchLineSource
+        let location: NoteSearchMatchLocation?
     }
 
     private struct IndexedDocument {
@@ -87,7 +125,8 @@ struct NoteSearchEngine {
     }
 
     func search(_ query: String, limit: Int = 40) -> [NoteSearchResult] {
-        let normalizedQuery = SearchTextNormalizer.normalize(query)
+        let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedQuery = SearchTextNormalizer.normalize(trimmedQuery)
         guard !normalizedQuery.isEmpty, limit > 0 else {
             return []
         }
@@ -130,7 +169,8 @@ struct NoteSearchEngine {
                 snippet: bestLine.displayText,
                 score: documentScore,
                 matchingLineCount: matchingLineCount,
-                source: bestLine.source
+                source: bestLine.source,
+                matchLocation: Self.matchLocation(for: trimmedQuery, in: bestLine)
             )
         }
         .sorted {
@@ -146,9 +186,8 @@ struct NoteSearchEngine {
     private static let minimumAcceptedScore = 0.61
 
     private static func indexDocument(_ document: NoteSearchDocument) -> IndexedDocument? {
-        let noteLines = document.text
-            .components(separatedBy: .newlines)
-            .compactMap { rawLine -> IndexedLine? in
+        let noteLines = rawLines(in: document.text).compactMap { line -> IndexedLine? in
+                let (rawLine, lineRange) = line
                 let displayText = SearchTextNormalizer.displayText(from: rawLine)
                 let normalizedText = SearchTextNormalizer.normalize(displayText)
                 guard !normalizedText.isEmpty else {
@@ -156,10 +195,12 @@ struct NoteSearchEngine {
                 }
 
                 return IndexedLine(
+                    rawText: rawLine,
                     displayText: displayText,
                     normalizedText: normalizedText,
                     tokens: SearchTextNormalizer.tokens(in: normalizedText),
-                    source: .note
+                    source: .note,
+                    location: .note(range: lineRange)
                 )
             }
 
@@ -171,10 +212,12 @@ struct NoteSearchEngine {
             }
 
             return IndexedLine(
+                rawText: line.text,
                 displayText: displayText,
                 normalizedText: normalizedText,
                 tokens: SearchTextNormalizer.tokens(in: normalizedText),
-                source: line.source
+                source: line.source,
+                location: line.location
             )
         }
         let lines = noteLines + supplementalLines
@@ -191,6 +234,67 @@ struct NoteSearchEngine {
             tokens: lines.flatMap(\.tokens),
             lines: lines
         )
+    }
+
+    private static func rawLines(in text: String) -> [(String, NSRange)] {
+        let source = text as NSString
+        guard source.length > 0 else {
+            return []
+        }
+
+        var lines: [(String, NSRange)] = []
+        var location = 0
+        while location < source.length {
+            let lineRange = source.lineRange(for: NSRange(location: location, length: 0))
+            var contentLength = lineRange.length
+            while contentLength > 0 {
+                let character = source.character(at: lineRange.location + contentLength - 1)
+                guard character == 0x0A || character == 0x0D else {
+                    break
+                }
+                contentLength -= 1
+            }
+            let contentRange = NSRange(location: lineRange.location, length: contentLength)
+            lines.append((source.substring(with: contentRange), contentRange))
+            location = NSMaxRange(lineRange)
+        }
+        return lines
+    }
+
+    private static func matchLocation(
+        for query: String,
+        in line: IndexedLine
+    ) -> NoteSearchMatchLocation? {
+        guard !query.isEmpty else {
+            return line.location
+        }
+
+        let localRange = (line.rawText as NSString).range(
+            of: query,
+            options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive]
+        )
+        guard localRange.location != NSNotFound else {
+            return line.location
+        }
+
+        switch line.location {
+        case let .note(range):
+            return .note(
+                range: NSRange(
+                    location: range.location + localRange.location,
+                    length: localRange.length
+                )
+            )
+        case let .image(attachmentPath, markdownRange, observationIndex, _):
+            return .image(
+                attachmentPath: attachmentPath,
+                markdownRange: markdownRange,
+                observationIndex: observationIndex,
+                characterRange: localRange
+            )
+        case nil:
+            return nil
+        }
     }
 
     private static func matchScore(
@@ -388,7 +492,7 @@ struct NoteSearchEngine {
     }
 }
 
-private enum SearchTextNormalizer {
+enum SearchTextNormalizer {
     static func containsCJK(_ text: String) -> Bool {
         text.unicodeScalars.contains { scalar in
             switch scalar.value {
