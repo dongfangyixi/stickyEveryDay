@@ -1,0 +1,110 @@
+import AppKit
+import Foundation
+import XCTest
+@testable import Pinaday
+
+final class ThemeConsistencyTests: XCTestCase {
+    func testAppControlsDoNotInheritTheSystemAccentColor() throws {
+        let sources = try applicationSources()
+
+        let systemAccentViolations = sources.filter {
+            $0.contents.contains("NSColor.controlAccentColor")
+        }
+        XCTAssertTrue(
+            systemAccentViolations.isEmpty,
+            "Use AppTheme.Palette instead of NSColor.controlAccentColor in: \(paths(in: systemAccentViolations))"
+        )
+
+        let implicitBorderedViolations = sources.filter {
+            $0.contents.contains(".buttonStyle(.bordered)")
+        }
+        XCTAssertTrue(
+            implicitBorderedViolations.isEmpty,
+            "Use a shared Pinaday button style instead of an implicit native bordered style in: \(paths(in: implicitBorderedViolations))"
+        )
+    }
+
+    func testNativeProminentButtonsUseThePinadayAccent() throws {
+        for source in try applicationSources() {
+            let lines = source.contents.components(separatedBy: .newlines)
+            for (index, line) in lines.enumerated()
+                where line.contains(".buttonStyle(.borderedProminent)") {
+                let tintWindow = lines[index..<min(index + 4, lines.count)]
+                XCTAssertTrue(
+                    tintWindow.contains { $0.contains(".tint(palette.accent)") },
+                    "Native prominent button must apply palette.accent at \(source.url.path):\(index + 1)"
+                )
+            }
+        }
+    }
+
+    func testAppKitScrollViewsUsePinadayScrollerAppearance() throws {
+        let rawScrollViewViolations = try applicationSources().filter {
+            $0.contents.contains("NSScrollView()")
+        }
+
+        XCTAssertTrue(
+            rawScrollViewViolations.isEmpty,
+            "Use PinadayScrollView so scrollbars follow the app theme in: \(paths(in: rawScrollViewViolations))"
+        )
+
+        for (palette, expectedStyle) in [
+            (AppTheme.yellow, NSScroller.KnobStyle.dark),
+            (AppTheme.light, NSScroller.KnobStyle.dark),
+            (AppTheme.dark, NSScroller.KnobStyle.light)
+        ] {
+            let scrollView = PinadayScrollView()
+            scrollView.hasVerticalScroller = true
+            scrollView.palette = palette
+
+            XCTAssertEqual(scrollView.verticalScroller?.knobStyle, expectedStyle)
+        }
+    }
+
+    func testSwiftUIScrollViewsDeclarePinadayNativeAppearance() throws {
+        for source in try applicationSources() {
+            let scrollViewCount = source.contents
+                .components(separatedBy: .newlines)
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { $0.hasPrefix("ScrollView {") }
+                .count
+            guard scrollViewCount > 0 else {
+                continue
+            }
+
+            let appearanceCount = source.contents
+                .components(separatedBy: ".pinadayNativeControlAppearance(")
+                .count - 1
+            XCTAssertGreaterThanOrEqual(
+                appearanceCount,
+                scrollViewCount,
+                "Every SwiftUI ScrollView must explicitly follow the Pinaday theme in \(source.url.path)"
+            )
+        }
+    }
+
+    private func applicationSources() throws -> [(url: URL, contents: String)] {
+        let projectRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let sourceRoot = projectRoot.appendingPathComponent("DailySticky", isDirectory: true)
+        guard let enumerator = FileManager.default.enumerator(
+            at: sourceRoot,
+            includingPropertiesForKeys: nil
+        ) else {
+            XCTFail("Could not enumerate application sources at \(sourceRoot.path)")
+            return []
+        }
+
+        return try enumerator.compactMap { item in
+            guard let url = item as? URL, url.pathExtension == "swift" else {
+                return nil
+            }
+            return (url, try String(contentsOf: url, encoding: .utf8))
+        }
+    }
+
+    private func paths(in sources: [(url: URL, contents: String)]) -> String {
+        sources.map(\.url.path).joined(separator: ", ")
+    }
+}

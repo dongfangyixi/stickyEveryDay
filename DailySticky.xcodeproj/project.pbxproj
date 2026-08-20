@@ -37,10 +37,29 @@
 		A10000000000000000000022 /* NoteSearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000026 /* NoteSearchView.swift */; };
 		A10000000000000000000023 /* AppLanguage.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000027 /* AppLanguage.swift */; };
 		A10000000000000000000024 /* AppLanguage+Help.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000028 /* AppLanguage+Help.swift */; };
+		A10000000000000000000025 /* StorageMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000029 /* StorageMode.swift */; };
+		A10000000000000000000026 /* CloudSyncModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000002A /* CloudSyncModels.swift */; };
+		A10000000000000000000027 /* CloudSyncMetadataStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000002B /* CloudSyncMetadataStore.swift */; };
+		A10000000000000000000028 /* SyncMergeEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000002C /* SyncMergeEngine.swift */; };
+		A10000000000000000000029 /* CloudKitSyncService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000002D /* CloudKitSyncService.swift */; };
+		A1000000000000000000002A /* CloudSyncCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000002E /* CloudSyncCoordinator.swift */; };
+		A1000000000000000000002B /* AppLanguage+CloudSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000002F /* AppLanguage+CloudSync.swift */; };
+		A1000000000000000000002C /* MarkdownImageReferenceParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000030 /* MarkdownImageReferenceParser.swift */; };
+		A1000000000000000000002D /* ImageOCRRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000031 /* ImageOCRRepository.swift */; };
+		A1000000000000000000002E /* OCRSearchIndexer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000032 /* OCRSearchIndexer.swift */; };
+		A1000000000000000000002F /* CurrentNoteFind.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000033 /* CurrentNoteFind.swift */; };
+		A10000000000000000000030 /* CurrentNoteFindView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000034 /* CurrentNoteFindView.swift */; };
+		A10000000000000000000031 /* SearchQueryField.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000035 /* SearchQueryField.swift */; };
+		A10000000000000000000032 /* NoteDateSearchEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000036 /* NoteDateSearchEngine.swift */; };
 		B10000000000000000000001 /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = B20000000000000000000001 /* Markdown */; };
 		C10000000000000000000001 /* CheckboxInteractionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000001 /* CheckboxInteractionTests.swift */; };
 		C10000000000000000000002 /* NoteSearchEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000003 /* NoteSearchEngineTests.swift */; };
 		C10000000000000000000003 /* NoteSearchFeatureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000004 /* NoteSearchFeatureTests.swift */; };
+		C10000000000000000000004 /* CloudSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000005 /* CloudSyncTests.swift */; };
+		C10000000000000000000005 /* ThemeConsistencyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000006 /* ThemeConsistencyTests.swift */; };
+		C10000000000000000000006 /* OCRSearchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000007 /* OCRSearchTests.swift */; };
+		C10000000000000000000007 /* CurrentNoteFindTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000008 /* CurrentNoteFindTests.swift */; };
+		C10000000000000000000008 /* GoToNoteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000009 /* GoToNoteTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -89,10 +108,29 @@
 		A20000000000000000000026 /* NoteSearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteSearchView.swift; sourceTree = "<group>"; };
 		A20000000000000000000027 /* AppLanguage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLanguage.swift; sourceTree = "<group>"; };
 		A20000000000000000000028 /* AppLanguage+Help.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppLanguage+Help.swift"; sourceTree = "<group>"; };
+		A20000000000000000000029 /* StorageMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StorageMode.swift; sourceTree = "<group>"; };
+		A2000000000000000000002A /* CloudSyncModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudSyncModels.swift; sourceTree = "<group>"; };
+		A2000000000000000000002B /* CloudSyncMetadataStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudSyncMetadataStore.swift; sourceTree = "<group>"; };
+		A2000000000000000000002C /* SyncMergeEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncMergeEngine.swift; sourceTree = "<group>"; };
+		A2000000000000000000002D /* CloudKitSyncService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudKitSyncService.swift; sourceTree = "<group>"; };
+		A2000000000000000000002E /* CloudSyncCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudSyncCoordinator.swift; sourceTree = "<group>"; };
+		A2000000000000000000002F /* AppLanguage+CloudSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppLanguage+CloudSync.swift"; sourceTree = "<group>"; };
+		A20000000000000000000030 /* MarkdownImageReferenceParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownImageReferenceParser.swift; sourceTree = "<group>"; };
+		A20000000000000000000031 /* ImageOCRRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageOCRRepository.swift; sourceTree = "<group>"; };
+		A20000000000000000000032 /* OCRSearchIndexer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OCRSearchIndexer.swift; sourceTree = "<group>"; };
+		A20000000000000000000033 /* CurrentNoteFind.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CurrentNoteFind.swift; sourceTree = "<group>"; };
+		A20000000000000000000034 /* CurrentNoteFindView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CurrentNoteFindView.swift; sourceTree = "<group>"; };
+		A20000000000000000000035 /* SearchQueryField.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchQueryField.swift; sourceTree = "<group>"; };
+		A20000000000000000000036 /* NoteDateSearchEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteDateSearchEngine.swift; sourceTree = "<group>"; };
 		C20000000000000000000001 /* CheckboxInteractionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CheckboxInteractionTests.swift; sourceTree = "<group>"; };
 		C20000000000000000000002 /* PinadayTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PinadayTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		C20000000000000000000003 /* NoteSearchEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteSearchEngineTests.swift; sourceTree = "<group>"; };
 		C20000000000000000000004 /* NoteSearchFeatureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteSearchFeatureTests.swift; sourceTree = "<group>"; };
+		C20000000000000000000005 /* CloudSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudSyncTests.swift; sourceTree = "<group>"; };
+		C20000000000000000000006 /* ThemeConsistencyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeConsistencyTests.swift; sourceTree = "<group>"; };
+		C20000000000000000000007 /* OCRSearchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OCRSearchTests.swift; sourceTree = "<group>"; };
+		C20000000000000000000008 /* CurrentNoteFindTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CurrentNoteFindTests.swift; sourceTree = "<group>"; };
+		C20000000000000000000009 /* GoToNoteTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoToNoteTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -139,6 +177,7 @@
 				A40000000000000000000004 /* App */,
 				A40000000000000000000005 /* Models */,
 				A40000000000000000000006 /* Storage */,
+				A4000000000000000000000F /* Sync */,
 				A40000000000000000000007 /* State */,
 				A40000000000000000000008 /* Services */,
 				A4000000000000000000000E /* Search */,
@@ -169,6 +208,8 @@
 				A20000000000000000000007 /* StoredWindowFrame.swift */,
 				A20000000000000000000027 /* AppLanguage.swift */,
 				A20000000000000000000028 /* AppLanguage+Help.swift */,
+				A2000000000000000000002F /* AppLanguage+CloudSync.swift */,
+				A20000000000000000000029 /* StorageMode.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -198,6 +239,8 @@
 				A2000000000000000000000E /* DateKeyService.swift */,
 				A2000000000000000000000F /* AutoSaveService.swift */,
 				A20000000000000000000022 /* AttachmentStore.swift */,
+				A20000000000000000000030 /* MarkdownImageReferenceParser.swift */,
+				A20000000000000000000031 /* ImageOCRRepository.swift */,
 				A2000000000000000000001E /* MarkdownTaskParser.swift */,
 				A20000000000000000000020 /* MarkdownInlineParser.swift */,
 			);
@@ -254,11 +297,28 @@
 		A4000000000000000000000E /* Search */ = {
 			isa = PBXGroup;
 			children = (
+				A20000000000000000000033 /* CurrentNoteFind.swift */,
+				A20000000000000000000034 /* CurrentNoteFindView.swift */,
+				A20000000000000000000036 /* NoteDateSearchEngine.swift */,
 				A20000000000000000000024 /* NoteSearchEngine.swift */,
 				A20000000000000000000025 /* NoteSearchController.swift */,
 				A20000000000000000000026 /* NoteSearchView.swift */,
+				A20000000000000000000032 /* OCRSearchIndexer.swift */,
+				A20000000000000000000035 /* SearchQueryField.swift */,
 			);
 			path = Search;
+			sourceTree = "<group>";
+		};
+		A4000000000000000000000F /* Sync */ = {
+			isa = PBXGroup;
+			children = (
+				A2000000000000000000002A /* CloudSyncModels.swift */,
+				A2000000000000000000002B /* CloudSyncMetadataStore.swift */,
+				A2000000000000000000002C /* SyncMergeEngine.swift */,
+				A2000000000000000000002D /* CloudKitSyncService.swift */,
+				A2000000000000000000002E /* CloudSyncCoordinator.swift */,
+			);
+			path = Sync;
 			sourceTree = "<group>";
 		};
 		C40000000000000000000001 /* DailyStickyTests */ = {
@@ -267,6 +327,11 @@
 				C20000000000000000000001 /* CheckboxInteractionTests.swift */,
 				C20000000000000000000003 /* NoteSearchEngineTests.swift */,
 				C20000000000000000000004 /* NoteSearchFeatureTests.swift */,
+				C20000000000000000000005 /* CloudSyncTests.swift */,
+				C20000000000000000000006 /* ThemeConsistencyTests.swift */,
+				C20000000000000000000007 /* OCRSearchTests.swift */,
+				C20000000000000000000008 /* CurrentNoteFindTests.swift */,
+				C20000000000000000000009 /* GoToNoteTests.swift */,
 			);
 			path = DailyStickyTests;
 			sourceTree = "<group>";
@@ -324,6 +389,11 @@
 				TargetAttributes = {
 					A50000000000000000000001 = {
 						CreatedOnToolsVersion = 15.3;
+						SystemCapabilities = {
+							com.apple.iCloud = {
+								enabled = 1;
+							};
+						};
 					};
 					C50000000000000000000001 = {
 						CreatedOnToolsVersion = 15.3;
@@ -395,6 +465,20 @@
 				A10000000000000000000022 /* NoteSearchView.swift in Sources */,
 				A10000000000000000000023 /* AppLanguage.swift in Sources */,
 				A10000000000000000000024 /* AppLanguage+Help.swift in Sources */,
+				A10000000000000000000025 /* StorageMode.swift in Sources */,
+				A10000000000000000000026 /* CloudSyncModels.swift in Sources */,
+				A10000000000000000000027 /* CloudSyncMetadataStore.swift in Sources */,
+				A10000000000000000000028 /* SyncMergeEngine.swift in Sources */,
+				A10000000000000000000029 /* CloudKitSyncService.swift in Sources */,
+				A1000000000000000000002A /* CloudSyncCoordinator.swift in Sources */,
+				A1000000000000000000002B /* AppLanguage+CloudSync.swift in Sources */,
+				A1000000000000000000002C /* MarkdownImageReferenceParser.swift in Sources */,
+				A1000000000000000000002D /* ImageOCRRepository.swift in Sources */,
+				A1000000000000000000002E /* OCRSearchIndexer.swift in Sources */,
+				A1000000000000000000002F /* CurrentNoteFind.swift in Sources */,
+				A10000000000000000000030 /* CurrentNoteFindView.swift in Sources */,
+				A10000000000000000000031 /* SearchQueryField.swift in Sources */,
+				A10000000000000000000032 /* NoteDateSearchEngine.swift in Sources */,
 				A1000000000000000000001B /* MarkdownTaskParser.swift in Sources */,
 				A1000000000000000000001D /* MarkdownInlineParser.swift in Sources */,
 				A10000000000000000000010 /* StickyWindowController.swift in Sources */,
@@ -415,6 +499,11 @@
 				C10000000000000000000001 /* CheckboxInteractionTests.swift in Sources */,
 				C10000000000000000000002 /* NoteSearchEngineTests.swift in Sources */,
 				C10000000000000000000003 /* NoteSearchFeatureTests.swift in Sources */,
+				C10000000000000000000004 /* CloudSyncTests.swift in Sources */,
+				C10000000000000000000005 /* ThemeConsistencyTests.swift in Sources */,
+				C10000000000000000000006 /* OCRSearchTests.swift in Sources */,
+				C10000000000000000000007 /* CurrentNoteFindTests.swift in Sources */,
+				C10000000000000000000008 /* GoToNoteTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -551,7 +640,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 20;
+				CURRENT_PROJECT_VERSION = 28;
 				DEVELOPMENT_TEAM = 8VAH68P422;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -579,7 +668,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 20;
+				CURRENT_PROJECT_VERSION = 28;
 				DEVELOPMENT_TEAM = 8VAH68P422;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;

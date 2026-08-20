@@ -57,10 +57,15 @@ struct DailyStickyApp: App {
             CommandGroup(after: .textEditing) {
                 Divider()
 
-                Button(localized("Search Notes")) {
-                    appDelegate.showNoteSearch()
+                Button(localized("Find in Note")) {
+                    appDelegate.showCurrentNoteFind()
                 }
                 .keyboardShortcut("f", modifiers: [.command])
+
+                Button(localized("Go to Note")) {
+                    appDelegate.showNoteSearch()
+                }
+                .keyboardShortcut("p", modifiers: [.command])
             }
         }
     }
@@ -242,6 +247,10 @@ private struct SettingsView: View {
 
             Divider()
 
+            StorageSyncSettingsSection()
+
+            Divider()
+
             VStack(alignment: .leading, spacing: 14) {
                 Toggle(
                     appState.localized("Keep sticky note above other windows"),
@@ -318,6 +327,132 @@ private struct SettingsView: View {
             launchAtLoginMessage = LaunchAtLoginService.statusMessage(language: appState.language)
             launchAtLoginError = error.localizedDescription
         }
+    }
+}
+
+private struct StorageSyncSettingsSection: View {
+    @EnvironmentObject private var appState: AppState
+
+    var body: some View {
+        let palette = appState.themePalette
+
+        VStack(alignment: .leading, spacing: 10) {
+            Text(appState.localized("Storage & Sync"))
+                .font(.system(size: 13, weight: .semibold))
+
+            HStack(spacing: 8) {
+                ForEach(StorageMode.allCases) { mode in
+                    StorageModeButton(mode: mode)
+                }
+            }
+
+            HStack(spacing: 8) {
+                Image(systemName: syncStatusIcon)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(syncStatusColor(palette: palette))
+                Text(syncStatusText)
+                    .font(.system(size: 11))
+                    .foregroundStyle(palette.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 8)
+                if appState.storageMode == .iCloud {
+                    Button(appState.localized("Sync Now")) {
+                        appState.syncNow()
+                    }
+                    .buttonStyle(SettingsActionButtonStyle(palette: palette))
+                    .disabled(isSyncBusy)
+                }
+            }
+
+            Text(appState.localized("Pinaday always saves a local offline copy first."))
+                .font(.system(size: 10.5))
+                .foregroundStyle(palette.secondaryText)
+        }
+    }
+
+    private var isSyncBusy: Bool {
+        appState.cloudSyncStatus == .checkingAccount || appState.cloudSyncStatus == .syncing
+    }
+
+    private var syncStatusIcon: String {
+        switch appState.cloudSyncStatus {
+        case .localOnly: return "internaldrive.fill"
+        case .checkingAccount, .syncing: return "arrow.triangle.2.circlepath.icloud"
+        case .upToDate: return "checkmark.icloud.fill"
+        case .offline: return "icloud.slash"
+        case .accountUnavailable, .capabilityUnavailable, .failed:
+            return "exclamationmark.icloud.fill"
+        }
+    }
+
+    private func syncStatusColor(palette: AppTheme.Palette) -> Color {
+        switch appState.cloudSyncStatus {
+        case .accountUnavailable, .capabilityUnavailable, .failed: return .red
+        default: return palette.accent
+        }
+    }
+
+    private var syncStatusText: String {
+        switch appState.cloudSyncStatus {
+        case .localOnly:
+            return appState.localized("Stored only on this Mac")
+        case .checkingAccount:
+            return appState.localized("Checking iCloud account...")
+        case .syncing:
+            return appState.localized("Syncing...")
+        case .upToDate:
+            return appState.localized("Up to date")
+        case .offline:
+            return appState.localized("Offline. Changes will sync when the connection returns.")
+        case .accountUnavailable:
+            return appState.localized("Sign in to iCloud in System Settings to sync.")
+        case .capabilityUnavailable:
+            return appState.localized("iCloud sync is unavailable in this build.")
+        case let .failed(message):
+            return String(
+                format: appState.localized("Sync couldn't finish: %@"),
+                locale: appState.language.locale,
+                message
+            )
+        }
+    }
+}
+
+private struct StorageModeButton: View {
+    @EnvironmentObject private var appState: AppState
+    let mode: StorageMode
+
+    var body: some View {
+        let palette = appState.themePalette
+        let isSelected = appState.storageMode == mode
+
+        Button {
+            appState.chooseStorageMode(mode)
+        } label: {
+            HStack(spacing: 7) {
+                Image(systemName: mode == .localOnly ? "internaldrive.fill" : "icloud.fill")
+                    .font(.system(size: 12, weight: .medium))
+                Text(appState.localized(mode.localizationKey))
+                    .font(.system(size: 12, weight: .semibold))
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 12, weight: .semibold))
+            }
+            .foregroundStyle(isSelected ? palette.accent : palette.text)
+            .padding(.horizontal, 10)
+            .frame(maxWidth: .infinity, minHeight: 36, maxHeight: 36)
+            .background(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(isSelected ? palette.accent.opacity(0.10) : palette.controlBackground)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .stroke(isSelected ? palette.accent : palette.separator, lineWidth: 1)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -536,6 +671,10 @@ struct DailyStickyHelpView: View {
 
                 HelpSection(title: "Settings") {
                     HelpLine(
+                        "Storage & Sync",
+                        detail: "Choose Local only to keep everything on this Mac, or Sync with iCloud to use the same notes on your Apple devices."
+                    )
+                    HelpLine(
                         "Theme",
                         detail: "Choose Yellow, Light, or Dark in Settings."
                     )
@@ -556,6 +695,7 @@ struct DailyStickyHelpView: View {
             .padding(26)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .pinadayNativeControlAppearance(palette)
         .frame(width: 540, height: 640)
         .background(palette.paper)
         .foregroundStyle(palette.text)

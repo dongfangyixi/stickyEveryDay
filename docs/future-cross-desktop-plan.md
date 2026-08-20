@@ -1,5 +1,11 @@
 # Future Cross-Desktop Plan
 
+## Implemented Apple Sync Foundation
+
+The macOS app now has an opt-in, local-first CloudKit layer. A user may stay permanently local-only or enable private iCloud synchronization from first-run setup or Settings. The CloudKit schema is intentionally platform-neutral so future iPhone, iPad, and watch clients can share the same day-page records without replacing the macOS local JSON store.
+
+Before shipping another Apple platform, reuse the merge engine and CloudKit record contract. Device-only UI preferences must remain outside synchronized day records.
+
 ## Strategy
 
 DailySticky should keep product behavior and storage portable while allowing each platform to use native UI technology.

@@ -43,6 +43,29 @@ Do not debug current app state using only the old non-sandbox path:
 
 When a saved window frame, theme, opacity, or note content looks wrong, inspect the sandbox container first.
 
+## Theme Ownership
+
+Pinaday's in-app controls must render from `AppTheme.Palette`, not from each Mac's system Accent Color.
+
+- Do not use an implicit native `.bordered` button inside an app-themed surface. Use a shared Pinaday button style instead.
+- A native `.borderedProminent` button is allowed only when it immediately applies `.tint(palette.accent)`.
+- AppKit controls must use `palette.accentNS`; never use `NSColor.controlAccentColor` for Pinaday UI.
+- Define enabled, pressed, and disabled foreground/background colors explicitly in shared styles.
+- System menus may follow macOS appearance because they live outside Pinaday's themed surfaces.
+- Run `ThemeConsistencyTests` after adding or changing a control. The test intentionally rejects implicit system-accent dependencies.
+
+## Cloud Sync Data Safety
+
+CloudKit responses are asynchronous snapshots, never replacements for the live editor state.
+
+- Never assign a returned cloud page dictionary directly over `AppState.data.pages`.
+- Reconcile every result with a three-way merge: the snapshot that started the request, the current in-memory pages, and the synchronized cloud pages.
+- A note edited while sync is running must remain local and be uploaded by a follow-up sync.
+- When local and remote both changed from the request snapshot, preserve both versions; never choose one silently.
+- Sync requests are serialized. New requests queue the latest snapshot instead of repeatedly cancelling active CloudKit work.
+- The local JSON store remains the offline source of truth and must be saved before any cloud request is scheduled.
+- Run the complete `CloudSyncTests` suite after changing persistence, autosave, app lifecycle, or CloudKit behavior.
+
 ## Definition Of Done
 
 For UI behavior fixes:

@@ -2,6 +2,7 @@ import SwiftUI
 
 struct StickyRootView: View {
     @EnvironmentObject private var appState: AppState
+    @ObservedObject var currentNoteFindController: CurrentNoteFindController
     let onToggleNoteSearch: () -> Void
     let onNoteSearchAnchorChange: (NSRect) -> Void
 
@@ -17,7 +18,7 @@ struct StickyRootView: View {
             Divider()
                 .overlay(palette.separator)
 
-            DailyNoteEditorView()
+            DailyNoteEditorView(findController: currentNoteFindController)
         }
         .frame(minWidth: 320, minHeight: 280)
         .background(palette.paper)

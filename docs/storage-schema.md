@@ -2,6 +2,35 @@
 
 DailySticky stores app data as platform-neutral JSON. Future macOS, Windows, and Linux implementations should preserve this shape unless `schemaVersion` is incremented with a documented migration.
 
+## Storage Modes
+
+Pinaday is local-first in both modes:
+
+- `localOnly` is the default. Notes and attachments stay in Application Support and no CloudKit API is called.
+- `iCloud` keeps the same local files as the offline source of truth, then mirrors note pages and attachments into the user's private CloudKit database.
+
+The user's explicit choice is stored in `AppSettings.storageMode` and `AppSettings.hasChosenStorageMode`. Existing data written before these fields defaults to local-only and asks the user once.
+
+## CloudKit Schema
+
+Container: `iCloud.com.makeeverydaybetter.dailysticky`
+
+Custom zone: `PinadayNotes`
+
+`DayPage` records use the stable date key as identity and contain `dateKey`, `noteText`, `createdAt`, and `updatedAt`.
+
+`Attachment` records contain a stable relative path, modified date, and a `CKAsset`. Paths remain compatible with existing Markdown image references under `attachments/<date>/...`.
+
+Search indexes, window position, theme, language, pinning, opacity, and login behavior remain device-local.
+
+## Merge Safety
+
+`cloud-sync-metadata.json` stores the last synchronized content hash for each date. If both local and remote text changed from that baseline, Pinaday keeps the newer text as the page and appends the other text under `## Sync conflict copy`. It never silently discards either version.
+
+A response is also merged against the exact local snapshot that started its request. Text typed while that request is running cannot be replaced by the older response. Pinaday queues a follow-up upload whenever the live note changed during synchronization.
+
+Local edits are uploaded after autosave. While Pinaday is active, it also checks for changes from other devices every 20 seconds; activating the app or pressing **Sync Now** checks immediately. Sync requests run serially so slower CloudKit operations cannot race each other.
+
 ## File Location
 
 macOS MVP:

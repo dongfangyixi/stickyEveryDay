@@ -10,7 +10,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var helpWindowController: NSWindowController?
     private var quickStartWindowController: NSWindowController?
     private var quickStartSettings: QuickStartSettings?
+    private var storageChoiceWindowController: NSWindowController?
     private var noteSearchPanelController: NoteSearchPanelController?
+    private var currentNoteFindController: CurrentNoteFindController?
     private var noteSearchAnchorScreenRect: NSRect?
     private var searchShortcutMonitor: Any?
     private var languageCancellable: AnyCancellable?
@@ -20,9 +22,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let dateKeyService = DateKeyService()
         let dataStore = JSONAppDataStore()
-        let appState = AppState(dataStore: dataStore, dateKeyService: dateKeyService)
+        let appState = AppState(
+            dataStore: dataStore,
+            dateKeyService: dateKeyService,
+            cloudSyncService: CloudKitSyncService()
+        )
+        let currentNoteFindController = CurrentNoteFindController()
         let stickyWindowController = StickyWindowController(
             appState: appState,
+            currentNoteFindController: currentNoteFindController,
             onToggleNoteSearch: { [weak self] in
                 self?.toggleNoteSearch(anchorScreenRect: nil)
             },
@@ -34,6 +42,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.appState = appState
         self.stickyWindowController = stickyWindowController
         self.noteSearchPanelController = NoteSearchPanelController(appState: appState)
+        self.currentNoteFindController = currentNoteFindController
         AppRuntime.shared.appState = appState
         AppRuntime.shared.language = appState.language
         languageCancellable = appState.$language.sink { [weak self] language in
@@ -43,7 +52,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         installSearchShortcutMonitor()
 
         stickyWindowController.show()
-        showQuickStartIfNeeded()
+        showFirstRunExperienceIfNeeded()
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        appState?.appDidBecomeActive()
+    }
+
+    func applicationDidResignActive(_ notification: Notification) {
+        appState?.appDidResignActive()
     }
 
     private func refreshLocalizedWindowTitles(language: AppLanguage) {
@@ -94,6 +111,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
     }
 
+    func showCurrentNoteFind() {
+        stickyWindowController?.show()
+        currentNoteFindController?.present()
+    }
+
     func toggleNoteSearch(anchorScreenRect: NSRect?) {
         if appState?.isNoteSearchPresented == true {
             dismissNoteSearch()
@@ -112,12 +134,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func installSearchShortcutMonitor() {
         searchShortcutMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard NoteSearchShortcut.matches(event) else {
-                return event
+            if CurrentNoteFindShortcut.matches(event) {
+                self?.showCurrentNoteFind()
+                return nil
             }
-
-            self?.showNoteSearch()
-            return nil
+            if GoToNoteShortcut.matches(event) {
+                self?.showNoteSearch()
+                return nil
+            }
+            return event
         }
     }
 
@@ -188,8 +213,69 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    private func showFirstRunExperienceIfNeeded() {
+        guard let appState else {
+            return
+        }
+
+        if !appState.hasChosenStorageMode {
+            DispatchQueue.main.async { [weak self] in
+                self?.showStorageChoice()
+            }
+        } else {
+            showQuickStartIfNeeded()
+        }
+    }
+
+    private func showStorageChoice() {
+        if let storageChoiceWindowController {
+            storageChoiceWindowController.window?.makeKeyAndOrderFront(nil)
+            return
+        }
+
+        guard let appState else {
+            return
+        }
+
+        let window = QuickStartWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 468, height: 330),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = appState.localized("Choose Note Storage")
+        window.backgroundColor = .clear
+        window.hasShadow = true
+        window.isMovableByWindowBackground = true
+        window.isOpaque = false
+        window.level = .floating
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(
+            rootView: StorageChoiceView { [weak self] storageMode in
+                self?.completeStorageChoice(storageMode)
+            }
+            .environmentObject(appState)
+        )
+        positionQuickStartWindow(window)
+
+        let controller = NSWindowController(window: window)
+        storageChoiceWindowController = controller
+        window.orderFrontRegardless()
+        controller.showWindow(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    private func completeStorageChoice(_ storageMode: StorageMode) {
+        appState?.chooseStorageMode(storageMode)
+        storageChoiceWindowController?.close()
+        storageChoiceWindowController = nil
+        showQuickStartIfNeeded()
+    }
+
     private func showQuickStartIfNeeded() {
         guard let appState,
+              appState.hasChosenStorageMode,
               !appState.hasSeenWelcome
         else {
             return
@@ -224,6 +310,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.hasShadow = true
         window.isMovableByWindowBackground = true
         window.isOpaque = false
+        window.level = .floating
         window.isReleasedWhenClosed = false
         window.delegate = self
         window.contentView = NSHostingView(
@@ -277,7 +364,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-enum NoteSearchShortcut {
+enum CurrentNoteFindShortcut {
     static func matches(_ event: NSEvent) -> Bool {
         matches(
             charactersIgnoringModifiers: event.charactersIgnoringModifiers,
@@ -291,6 +378,23 @@ enum NoteSearchShortcut {
     ) -> Bool {
         let relevantModifiers = modifierFlags.intersection(.deviceIndependentFlagsMask)
         return charactersIgnoringModifiers?.lowercased() == "f" && relevantModifiers == .command
+    }
+}
+
+enum GoToNoteShortcut {
+    static func matches(_ event: NSEvent) -> Bool {
+        matches(
+            charactersIgnoringModifiers: event.charactersIgnoringModifiers,
+            modifierFlags: event.modifierFlags
+        )
+    }
+
+    static func matches(
+        charactersIgnoringModifiers: String?,
+        modifierFlags: NSEvent.ModifierFlags
+    ) -> Bool {
+        let relevantModifiers = modifierFlags.intersection(.deviceIndependentFlagsMask)
+        return charactersIgnoringModifiers?.lowercased() == "p" && relevantModifiers == .command
     }
 }
 
@@ -320,6 +424,136 @@ private final class QuickStartWindow: NSWindow {
 
     override var canBecomeMain: Bool {
         true
+    }
+}
+
+private struct StorageChoiceView: View {
+    @EnvironmentObject private var appState: AppState
+    @State private var selection: StorageMode = .localOnly
+    let onContinue: (StorageMode) -> Void
+
+    var body: some View {
+        let palette = appState.themePalette
+
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(appState.localized("Choose where your notes live"))
+                    .font(.system(size: 21, weight: .semibold, design: .rounded))
+                Text(appState.localized("You can change this later in Settings."))
+                    .font(.system(size: 12))
+                    .foregroundStyle(palette.secondaryText)
+            }
+
+            VStack(spacing: 9) {
+                StorageChoiceRow(
+                    mode: .localOnly,
+                    systemImage: "internaldrive.fill",
+                    detail: "Notes and images stay on this Mac. Nothing is uploaded to iCloud.",
+                    badge: "Recommended for privacy",
+                    selection: $selection
+                )
+                StorageChoiceRow(
+                    mode: .iCloud,
+                    systemImage: "icloud.fill",
+                    detail: "Keep notes and images available on your Apple devices using the same Apple Account.",
+                    badge: nil,
+                    selection: $selection
+                )
+            }
+
+            HStack {
+                Label(
+                    appState.localized("Your notes always remain available offline on this Mac."),
+                    systemImage: "lock.shield"
+                )
+                .font(.system(size: 11))
+                .foregroundStyle(palette.secondaryText)
+
+                Spacer()
+
+                Button(appState.localized("Continue")) {
+                    onContinue(selection)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(palette.accent)
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
+        .frame(width: 468, height: 330)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(palette.paper)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(palette.separator, lineWidth: 1)
+        )
+        .foregroundStyle(palette.text)
+    }
+}
+
+private struct StorageChoiceRow: View {
+    let mode: StorageMode
+    let systemImage: String
+    let detail: String
+    let badge: String?
+    @Binding var selection: StorageMode
+    @EnvironmentObject private var appState: AppState
+
+    var body: some View {
+        let palette = appState.themePalette
+        let isSelected = selection == mode
+
+        Button {
+            selection = mode
+        } label: {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundStyle(isSelected ? palette.accent : palette.secondaryText)
+                    .frame(width: 24, height: 24)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 8) {
+                        Text(appState.localized(mode.localizationKey))
+                            .font(.system(size: 14, weight: .semibold))
+                        if let badge {
+                            Text(appState.localized(badge))
+                                .font(.system(size: 9, weight: .semibold))
+                                .padding(.horizontal, 6)
+                                .frame(height: 18)
+                                .background(
+                                    Capsule().fill(palette.accent.opacity(0.14))
+                                )
+                                .foregroundStyle(palette.accent)
+                        }
+                    }
+                    Text(appState.localized(detail))
+                        .font(.system(size: 11))
+                        .foregroundStyle(palette.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer(minLength: 8)
+
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(isSelected ? palette.accent : palette.secondaryText.opacity(0.7))
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, minHeight: 78, alignment: .topLeading)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(isSelected ? palette.accent.opacity(0.08) : palette.paperInset)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(isSelected ? palette.accent : palette.separator, lineWidth: isSelected ? 1.5 : 1)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
 

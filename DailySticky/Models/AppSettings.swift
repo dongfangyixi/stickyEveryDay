@@ -29,6 +29,8 @@ struct AppSettings: Codable, Equatable {
     var language: AppLanguage
     var noteOpacity: Double
     var hasSeenWelcome: Bool
+    var storageMode: StorageMode
+    var hasChosenStorageMode: Bool
 
     init(
         lastOpenedDateKey: String,
@@ -37,7 +39,9 @@ struct AppSettings: Codable, Equatable {
         theme: AppThemeKind = .yellow,
         language: AppLanguage = .english,
         noteOpacity: Double = 1.0,
-        hasSeenWelcome: Bool = false
+        hasSeenWelcome: Bool = false,
+        storageMode: StorageMode = .localOnly,
+        hasChosenStorageMode: Bool = false
     ) {
         self.lastOpenedDateKey = lastOpenedDateKey
         self.isPinned = isPinned
@@ -46,6 +50,8 @@ struct AppSettings: Codable, Equatable {
         self.language = language
         self.noteOpacity = Self.clampedOpacity(noteOpacity)
         self.hasSeenWelcome = hasSeenWelcome
+        self.storageMode = storageMode
+        self.hasChosenStorageMode = hasChosenStorageMode
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -56,6 +62,8 @@ struct AppSettings: Codable, Equatable {
         case language
         case noteOpacity
         case hasSeenWelcome
+        case storageMode
+        case hasChosenStorageMode
     }
 
     init(from decoder: Decoder) throws {
@@ -69,6 +77,8 @@ struct AppSettings: Codable, Equatable {
             try container.decodeIfPresent(Double.self, forKey: .noteOpacity) ?? 1.0
         )
         hasSeenWelcome = try container.decodeIfPresent(Bool.self, forKey: .hasSeenWelcome) ?? false
+        storageMode = try container.decodeIfPresent(StorageMode.self, forKey: .storageMode) ?? .localOnly
+        hasChosenStorageMode = try container.decodeIfPresent(Bool.self, forKey: .hasChosenStorageMode) ?? false
     }
 
     static func clampedOpacity(_ opacity: Double) -> Double {

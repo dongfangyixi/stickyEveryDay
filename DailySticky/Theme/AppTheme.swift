@@ -120,6 +120,31 @@ enum AppTheme {
     }
 }
 
+final class PinadayScrollView: NSScrollView {
+    var palette: AppTheme.Palette = AppTheme.yellow {
+        didSet {
+            applyScrollerAppearance()
+        }
+    }
+
+    override func tile() {
+        super.tile()
+        applyScrollerAppearance()
+    }
+
+    private func applyScrollerAppearance() {
+        let knobStyle: NSScroller.KnobStyle = palette.kind == .dark ? .light : .dark
+        verticalScroller?.knobStyle = knobStyle
+        horizontalScroller?.knobStyle = knobStyle
+    }
+}
+
+extension View {
+    func pinadayNativeControlAppearance(_ palette: AppTheme.Palette) -> some View {
+        environment(\.colorScheme, palette.kind == .dark ? .dark : .light)
+    }
+}
+
 enum StickyHeaderControlMetrics {
     static let height: CGFloat = 28
     static let cornerRadius: CGFloat = 7
@@ -183,6 +208,43 @@ struct StickyHeaderChipButtonStyle: ButtonStyle {
                         : palette.controlBackground
                 )
             )
+    }
+}
+
+struct SettingsActionButtonStyle: ButtonStyle {
+    let palette: AppTheme.Palette
+
+    func makeBody(configuration: Configuration) -> some View {
+        SettingsActionButtonBody(configuration: configuration, palette: palette)
+    }
+}
+
+private struct SettingsActionButtonBody: View {
+    @Environment(\.isEnabled) private var isEnabled
+
+    let configuration: ButtonStyle.Configuration
+    let palette: AppTheme.Palette
+
+    var body: some View {
+        configuration.label
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(isEnabled ? palette.text : palette.secondaryText)
+            .padding(.horizontal, 10)
+            .frame(height: 24)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(
+                        configuration.isPressed && isEnabled
+                            ? palette.controlPressedBackground
+                            : palette.controlBackground
+                    )
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .stroke(palette.separator, lineWidth: 1)
+            )
+            .contentShape(Rectangle())
+            .opacity(isEnabled ? 1 : 0.62)
     }
 }
 

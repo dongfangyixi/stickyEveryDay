@@ -24,13 +24,20 @@ struct DateHeaderView: View {
 
                     Group {
                         if isCompact {
-                            Text(appState.currentShortDateTitle)
+                            stableDateTitle(
+                                appState.currentShortDateTitle,
+                                tier: .navigation
+                            )
                         } else {
                             ViewThatFits(in: .horizontal) {
-                                Text(appState.currentDateTitle)
-                                    .fixedSize(horizontal: true, vertical: false)
-                                Text(appState.currentCompactDateTitle)
-                                    .fixedSize(horizontal: true, vertical: false)
+                                stableDateTitle(
+                                    appState.currentDateTitle,
+                                    tier: .full
+                                )
+                                stableDateTitle(
+                                    appState.currentCompactDateTitle,
+                                    tier: .compact
+                                )
                             }
                         }
                     }
@@ -69,8 +76,8 @@ struct DateHeaderView: View {
                             palette: palette
                         )
                     )
-                    .accessibilityLabel(appState.localized("Search notes"))
-                    .help(appState.localized("Search notes"))
+                    .accessibilityLabel(appState.localized("Go to note"))
+                    .help(appState.localized("Go to note"))
                     .background {
                         SearchPanelAnchorReader { screenRect in
                             onNoteSearchAnchorChange(screenRect)
@@ -87,6 +94,21 @@ struct DateHeaderView: View {
             .padding(.vertical, 8)
         }
         .frame(height: StickyHeaderControlMetrics.height + 16)
+    }
+
+    private func stableDateTitle(
+        _ title: String,
+        tier: DateHeaderTitleTier
+    ) -> some View {
+        Text(title)
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
+            .frame(
+                width: DateHeaderTitleMetrics.reservedWidth(
+                    for: tier,
+                    locale: appState.language.locale
+                )
+            )
     }
 
     @ViewBuilder
@@ -122,6 +144,81 @@ struct DateHeaderView: View {
             .accessibilityLabel(appState.language.returnAccessibilityLabel(date: accessibleTitle))
             .help(appState.language.returnTooltip(date: shortTitle))
         }
+    }
+}
+
+enum DateHeaderTitleTier: String, CaseIterable {
+    case full
+    case compact
+    case navigation
+
+    var dateFormatTemplate: String {
+        switch self {
+        case .full:
+            return "yMMMMEEEEd"
+        case .compact:
+            return "yMMMd"
+        case .navigation:
+            return "MMMdEEE"
+        }
+    }
+}
+
+enum DateHeaderTitleMetrics {
+    private static let fontSize: CGFloat = 14
+    private static let safetyPadding: CGFloat = 6
+    private static let cache = NSCache<NSString, NSNumber>()
+
+    static func reservedWidth(for tier: DateHeaderTitleTier, locale: Locale) -> CGFloat {
+        let locale = normalizedLocale(locale)
+        let cacheKey = "\(locale.identifier)|\(tier.rawValue)" as NSString
+        if let cachedWidth = cache.object(forKey: cacheKey) {
+            return CGFloat(cachedWidth.doubleValue)
+        }
+
+        let formatter = DateFormatter()
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.locale = locale
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        formatter.calendar = calendar
+        formatter.locale = locale
+        formatter.timeZone = calendar.timeZone
+        formatter.setLocalizedDateFormatFromTemplate(tier.dateFormatTemplate)
+
+        let startDate = calendar.date(from: DateComponents(year: 2024, month: 1, day: 1))!
+        let dayCount = calendar.range(of: .day, in: .year, for: startDate)?.count ?? 366
+        var widestTitle: CGFloat = 0
+
+        for dayOffset in 0..<dayCount {
+            guard let date = calendar.date(byAdding: .day, value: dayOffset, to: startDate) else {
+                continue
+            }
+            widestTitle = max(widestTitle, measuredWidth(of: formatter.string(from: date)))
+        }
+
+        let reservedWidth = ceil(widestTitle + safetyPadding)
+        cache.setObject(NSNumber(value: Double(reservedWidth)), forKey: cacheKey)
+        return reservedWidth
+    }
+
+    static func measuredWidth(of title: String) -> CGFloat {
+        let baseFont = NSFont.systemFont(ofSize: fontSize, weight: .semibold)
+        let font: NSFont
+        if let roundedDescriptor = baseFont.fontDescriptor.withDesign(.rounded),
+           let roundedFont = NSFont(descriptor: roundedDescriptor, size: fontSize) {
+            font = roundedFont
+        } else {
+            font = baseFont
+        }
+
+        return ceil((title as NSString).size(withAttributes: [.font: font]).width)
+    }
+
+    private static func normalizedLocale(_ locale: Locale) -> Locale {
+        guard locale.language.languageCode?.identifier == "en" else {
+            return locale
+        }
+        return Locale(identifier: "en_US")
     }
 }
 
