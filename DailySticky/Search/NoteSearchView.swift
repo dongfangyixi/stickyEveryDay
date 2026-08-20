@@ -376,6 +376,7 @@ struct NoteSearchPanelView: View {
                         }
                     }
                 }
+                .pinadayNativeControlAppearance(palette)
                 .background {
                     GeometryReader { geometry in
                         Color.clear.preference(

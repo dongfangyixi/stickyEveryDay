@@ -120,6 +120,31 @@ enum AppTheme {
     }
 }
 
+final class PinadayScrollView: NSScrollView {
+    var palette: AppTheme.Palette = AppTheme.yellow {
+        didSet {
+            applyScrollerAppearance()
+        }
+    }
+
+    override func tile() {
+        super.tile()
+        applyScrollerAppearance()
+    }
+
+    private func applyScrollerAppearance() {
+        let knobStyle: NSScroller.KnobStyle = palette.kind == .dark ? .light : .dark
+        verticalScroller?.knobStyle = knobStyle
+        horizontalScroller?.knobStyle = knobStyle
+    }
+}
+
+extension View {
+    func pinadayNativeControlAppearance(_ palette: AppTheme.Palette) -> some View {
+        environment(\.colorScheme, palette.kind == .dark ? .dark : .light)
+    }
+}
+
 enum StickyHeaderControlMetrics {
     static let height: CGFloat = 28
     static let cornerRadius: CGFloat = 7

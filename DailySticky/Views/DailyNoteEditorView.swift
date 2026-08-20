@@ -22,6 +22,32 @@ private enum TodoLayout {
     }
 }
 
+enum OCRSearchRevealGeometry {
+    static func displayRect(
+        for normalizedRect: CGRect,
+        in imageRect: CGRect
+    ) -> CGRect {
+        CGRect(
+            x: imageRect.minX + normalizedRect.minX * imageRect.width,
+            y: imageRect.minY + (1 - normalizedRect.maxY) * imageRect.height,
+            width: normalizedRect.width * imageRect.width,
+            height: normalizedRect.height * imageRect.height
+        )
+    }
+
+    static func centeredVerticalOffset(
+        for targetRect: CGRect,
+        viewportHeight: CGFloat,
+        documentHeight: CGFloat
+    ) -> CGFloat {
+        let maximumOffset = max(0, documentHeight - viewportHeight)
+        return min(
+            maximumOffset,
+            max(0, targetRect.midY - viewportHeight / 2)
+        )
+    }
+}
+
 private enum MarkdownTableCellRenderer {
     static let horizontalPadding: CGFloat = 8
     static let verticalPadding: CGFloat = 4
@@ -733,6 +759,7 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         var range: NSRange
         var lineIndex: Int
         var kind: SearchDisplayTargetKind
+        var normalizedImageBoundingBox: CGRect?
     }
 
     private struct SearchPresentationMap {
@@ -745,7 +772,7 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         var sourceRange: NSRange
     }
 
-    private let scrollView = NSScrollView()
+    private let scrollView = PinadayScrollView()
     private let textView = TodoTextView()
     private let overlayView = TodoCheckboxOverlayView()
     private let imageInteractionView = MarkdownImageInteractionOverlayView()
@@ -1175,6 +1202,7 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = false
         scrollView.borderType = .noBorder
+        scrollView.palette = palette
         scrollView.contentView.postsBoundsChangedNotifications = true
         scrollView.contentInsets = NSEdgeInsets(top: 0, left: 0, bottom: lineHeight(), right: 0)
 
@@ -1346,6 +1374,7 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         imageOverlayView.palette = palette
         imageInteractionView.palette = palette
         slashPaletteView.palette = palette
+        scrollView.palette = palette
     }
 
     private func updateSelectionAppearance() {
@@ -3817,17 +3846,19 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
                         length: min(sourceRange.length, max(0, displayContentRange.length - offset))
                     ),
                     lineIndex: segment.displayLineIndex,
-                    kind: kind
+                    kind: kind,
+                    normalizedImageBoundingBox: nil
                 )
             }
 
             return SearchDisplayTarget(
                 range: displayContentRange,
                 lineIndex: segment.displayLineIndex,
-                kind: kind
+                kind: kind,
+                normalizedImageBoundingBox: nil
             )
 
-        case .image(_, let markdownRange, _, _):
+        case .image(_, let markdownRange, _, _, let normalizedBoundingBox):
             guard let segment = map.segments.first(where: {
                 $0.sourceLineRange.intersection(markdownRange) != nil
             }) else {
@@ -3836,7 +3867,8 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             return SearchDisplayTarget(
                 range: segment.displayContentRange,
                 lineIndex: segment.displayLineIndex,
-                kind: .image
+                kind: .image,
+                normalizedImageBoundingBox: normalizedBoundingBox
             )
         }
     }
@@ -3880,7 +3912,7 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         switch target.kind {
         case .text:
             textView.scrollRangeToVisible(target.range)
-        case .table, .image:
+        case .table:
             let lines = lineInfos()
             if lines.indices.contains(target.lineIndex),
                var lineRect = lineFragmentRect(
@@ -3897,9 +3929,68 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             } else {
                 textView.scrollRangeToVisible(target.range)
             }
+        case .image:
+            if let normalizedBoundingBox = target.normalizedImageBoundingBox,
+               let targetRect = imageSearchTargetRect(
+                   lineIndex: target.lineIndex,
+                   normalizedBoundingBox: normalizedBoundingBox,
+                   layoutManager: layoutManager
+               ) {
+                centerSearchTargetVertically(targetRect)
+            } else {
+                textView.scrollRangeToVisible(target.range)
+            }
         }
         textView.setSelectedRange(selection)
         refreshOverlay()
+    }
+
+    private func imageSearchTargetRect(
+        lineIndex: Int,
+        normalizedBoundingBox: CGRect,
+        layoutManager: NSLayoutManager
+    ) -> NSRect? {
+        let lines = lineInfos()
+        guard lines.indices.contains(lineIndex),
+              let lineRect = lineFragmentRect(
+                  for: lines[lineIndex],
+                  layoutManager: layoutManager
+              ),
+              let reference = imageReference(in: lines[lineIndex].text),
+              let image = image(for: reference)
+        else {
+            return nil
+        }
+
+        let previewSize = imagePreviewSize(
+            for: image,
+            reference: reference,
+            lineIndex: lineIndex
+        )
+        let imageRect = NSRect(
+            x: textView.textContainerOrigin.x,
+            y: textView.textContainerOrigin.y + lineRect.minY + 6,
+            width: previewSize.width,
+            height: previewSize.height
+        )
+        return OCRSearchRevealGeometry.displayRect(
+            for: normalizedBoundingBox,
+            in: imageRect
+        )
+    }
+
+    private func centerSearchTargetVertically(_ targetRect: NSRect) {
+        let clipView = scrollView.contentView
+        let viewport = clipView.bounds
+        let targetOffset = OCRSearchRevealGeometry.centeredVerticalOffset(
+            for: targetRect,
+            viewportHeight: viewport.height,
+            documentHeight: textView.bounds.height
+        )
+        clipView.scroll(
+            to: NSPoint(x: viewport.origin.x, y: targetOffset)
+        )
+        scrollView.reflectScrolledClipView(clipView)
     }
 
     private func applySearchHighlights(to textStorage: NSTextStorage) {
@@ -3965,7 +4056,13 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         let map = searchPresentationMap()
 
         for match in findMatches {
-            guard case let .image(_, _, observationIndex, characterRange) = match.location,
+            guard case let .image(
+                _,
+                _,
+                observationIndex,
+                characterRange,
+                _
+            ) = match.location,
                   let target = displayTarget(for: match.location, using: map)
             else {
                 continue
@@ -3981,7 +4078,13 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
 
         if let revealRequest,
            revealRequest.dateKey == dateKey,
-           case let .image(_, _, observationIndex, characterRange) = revealRequest.location,
+           case let .image(
+               _,
+               _,
+               observationIndex,
+               characterRange,
+               _
+           ) = revealRequest.location,
            let target = displayTarget(for: revealRequest.location, using: map) {
             highlights[target.lineIndex, default: []].append(
                 OCRSearchHighlight(
@@ -5650,7 +5753,7 @@ private final class SlashCommandPaletteView: NSView {
     private static let rowHeight: CGFloat = 24
     private static let rowSpacing: CGFloat = 2
     private static let verticalPadding: CGFloat = 6
-    private let scrollView = NSScrollView()
+    private let scrollView = PinadayScrollView()
     private let documentView = SlashCommandPaletteDocumentView()
     private let stackView = NSStackView()
     private var trackingArea: NSTrackingArea?
@@ -5666,6 +5769,7 @@ private final class SlashCommandPaletteView: NSView {
         didSet {
             needsDisplay = true
             updateButtonColors()
+            scrollView.palette = palette
         }
     }
 
@@ -5803,6 +5907,7 @@ private final class SlashCommandPaletteView: NSView {
         scrollView.hasHorizontalScroller = false
         scrollView.autohidesScrollers = true
         scrollView.borderType = .noBorder
+        scrollView.palette = palette
         scrollView.translatesAutoresizingMaskIntoConstraints = false
 
         stackView.orientation = .vertical

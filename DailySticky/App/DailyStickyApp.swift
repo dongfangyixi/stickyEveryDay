@@ -695,6 +695,7 @@ struct DailyStickyHelpView: View {
             .padding(26)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .pinadayNativeControlAppearance(palette)
         .frame(width: 540, height: 640)
         .background(palette.paper)
         .foregroundStyle(palette.text)

@@ -28,7 +28,8 @@ struct OCRSearchIndexer: Sendable {
                             characterRange: NSRange(
                                 location: 0,
                                 length: (observation.text as NSString).length
-                            )
+                            ),
+                            normalizedBoundingBox: observation.boundingBox
                         )
                     )
                 }

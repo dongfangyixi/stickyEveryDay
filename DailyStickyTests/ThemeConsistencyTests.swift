@@ -1,5 +1,7 @@
+import AppKit
 import Foundation
 import XCTest
+@testable import Pinaday
 
 final class ThemeConsistencyTests: XCTestCase {
     func testAppControlsDoNotInheritTheSystemAccentColor() throws {
@@ -33,6 +35,51 @@ final class ThemeConsistencyTests: XCTestCase {
                     "Native prominent button must apply palette.accent at \(source.url.path):\(index + 1)"
                 )
             }
+        }
+    }
+
+    func testAppKitScrollViewsUsePinadayScrollerAppearance() throws {
+        let rawScrollViewViolations = try applicationSources().filter {
+            $0.contents.contains("NSScrollView()")
+        }
+
+        XCTAssertTrue(
+            rawScrollViewViolations.isEmpty,
+            "Use PinadayScrollView so scrollbars follow the app theme in: \(paths(in: rawScrollViewViolations))"
+        )
+
+        for (palette, expectedStyle) in [
+            (AppTheme.yellow, NSScroller.KnobStyle.dark),
+            (AppTheme.light, NSScroller.KnobStyle.dark),
+            (AppTheme.dark, NSScroller.KnobStyle.light)
+        ] {
+            let scrollView = PinadayScrollView()
+            scrollView.hasVerticalScroller = true
+            scrollView.palette = palette
+
+            XCTAssertEqual(scrollView.verticalScroller?.knobStyle, expectedStyle)
+        }
+    }
+
+    func testSwiftUIScrollViewsDeclarePinadayNativeAppearance() throws {
+        for source in try applicationSources() {
+            let scrollViewCount = source.contents
+                .components(separatedBy: .newlines)
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { $0.hasPrefix("ScrollView {") }
+                .count
+            guard scrollViewCount > 0 else {
+                continue
+            }
+
+            let appearanceCount = source.contents
+                .components(separatedBy: ".pinadayNativeControlAppearance(")
+                .count - 1
+            XCTAssertGreaterThanOrEqual(
+                appearanceCount,
+                scrollViewCount,
+                "Every SwiftUI ScrollView must explicitly follow the Pinaday theme in \(source.url.path)"
+            )
         }
     }
 

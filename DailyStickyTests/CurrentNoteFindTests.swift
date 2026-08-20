@@ -51,7 +51,8 @@ final class CurrentNoteFindTests: XCTestCase {
             attachmentPath: reference.path,
             markdownRange: reference.markdownRange,
             observationIndex: 2,
-            text: "Invoice total 438 dollars"
+            text: "Invoice total 438 dollars",
+            normalizedBoundingBox: CGRect(x: 0.1, y: 0.72, width: 0.8, height: 0.08)
         )
 
         let matches = CurrentNoteFindEngine.matches(
@@ -68,7 +69,13 @@ final class CurrentNoteFindTests: XCTestCase {
                     attachmentPath: reference.path,
                     markdownRange: reference.markdownRange,
                     observationIndex: 2,
-                    characterRange: NSRange(location: 14, length: 3)
+                    characterRange: NSRange(location: 14, length: 3),
+                    normalizedBoundingBox: CGRect(
+                        x: 0.1,
+                        y: 0.72,
+                        width: 0.8,
+                        height: 0.08
+                    )
                 )
             ]
         )
@@ -126,7 +133,13 @@ final class CurrentNoteFindTests: XCTestCase {
                                 attachmentPath: "attachments/receipt.png",
                                 markdownRange: markdownRange,
                                 observationIndex: 2,
-                                characterRange: NSRange(location: 0, length: 25)
+                                characterRange: NSRange(location: 0, length: 25),
+                                normalizedBoundingBox: CGRect(
+                                    x: 0.1,
+                                    y: 0.72,
+                                    width: 0.8,
+                                    height: 0.08
+                                )
                             )
                         )
                     ]
@@ -140,7 +153,13 @@ final class CurrentNoteFindTests: XCTestCase {
                 attachmentPath: "attachments/receipt.png",
                 markdownRange: markdownRange,
                 observationIndex: 2,
-                characterRange: NSRange(location: 14, length: 3)
+                characterRange: NSRange(location: 14, length: 3),
+                normalizedBoundingBox: CGRect(
+                    x: 0.1,
+                    y: 0.72,
+                    width: 0.8,
+                    height: 0.08
+                )
             )
         )
     }
@@ -238,7 +257,8 @@ final class CurrentNoteFindTests: XCTestCase {
             attachmentPath: reference.path,
             markdownRange: reference.markdownRange,
             observationIndex: 0,
-            characterRange: NSRange(location: 8, length: 5)
+            characterRange: NSRange(location: 8, length: 5),
+            normalizedBoundingBox: CGRect(x: 0.2, y: 0.15, width: 0.4, height: 0.06)
         )
         let editor = InlineTodoTextEditorContainer(
             frame: NSRect(x: 0, y: 0, width: 360, height: 180)
@@ -247,6 +267,50 @@ final class CurrentNoteFindTests: XCTestCase {
 
         XCTAssertEqual(editor.displayLineIndexForSearchTesting(location), 2)
         XCTAssertEqual(editor.text, markdown)
+    }
+
+    func testOCRSearchRevealMapsVisionCoordinatesIntoRenderedImage() {
+        let imageRect = CGRect(x: 10, y: 100, width: 400, height: 800)
+
+        let nearTop = OCRSearchRevealGeometry.displayRect(
+            for: CGRect(x: 0.25, y: 0.80, width: 0.5, height: 0.10),
+            in: imageRect
+        )
+        let nearBottom = OCRSearchRevealGeometry.displayRect(
+            for: CGRect(x: 0.25, y: 0.10, width: 0.5, height: 0.10),
+            in: imageRect
+        )
+
+        XCTAssertEqual(nearTop, CGRect(x: 110, y: 180, width: 200, height: 80))
+        XCTAssertEqual(nearBottom, CGRect(x: 110, y: 740, width: 200, height: 80))
+        XCTAssertLessThan(nearTop.midY, nearBottom.midY)
+    }
+
+    func testOCRSearchRevealCentersAndClampsInsideDocument() {
+        XCTAssertEqual(
+            OCRSearchRevealGeometry.centeredVerticalOffset(
+                for: CGRect(x: 0, y: 20, width: 50, height: 20),
+                viewportHeight: 200,
+                documentHeight: 1_000
+            ),
+            0
+        )
+        XCTAssertEqual(
+            OCRSearchRevealGeometry.centeredVerticalOffset(
+                for: CGRect(x: 0, y: 480, width: 50, height: 40),
+                viewportHeight: 200,
+                documentHeight: 1_000
+            ),
+            400
+        )
+        XCTAssertEqual(
+            OCRSearchRevealGeometry.centeredVerticalOffset(
+                for: CGRect(x: 0, y: 960, width: 50, height: 30),
+                viewportHeight: 200,
+                documentHeight: 1_000
+            ),
+            800
+        )
     }
 
     func testCurrentNoteFindShortcutIsCommandFOnly() {

@@ -285,12 +285,19 @@ struct NoteSearchEngine {
                     length: localRange.length
                 )
             )
-        case let .image(attachmentPath, markdownRange, observationIndex, _):
+        case let .image(
+            attachmentPath,
+            markdownRange,
+            observationIndex,
+            _,
+            normalizedBoundingBox
+        ):
             return .image(
                 attachmentPath: attachmentPath,
                 markdownRange: markdownRange,
                 observationIndex: observationIndex,
-                characterRange: localRange
+                characterRange: localRange,
+                normalizedBoundingBox: normalizedBoundingBox
             )
         case nil:
             return nil

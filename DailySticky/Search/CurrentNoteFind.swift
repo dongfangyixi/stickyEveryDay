@@ -7,14 +7,15 @@ enum NoteSearchMatchLocation: Equatable, Sendable {
         attachmentPath: String,
         markdownRange: NSRange,
         observationIndex: Int,
-        characterRange: NSRange
+        characterRange: NSRange,
+        normalizedBoundingBox: CGRect
     )
 
     var source: NoteSearchLineSource {
         switch self {
         case .note:
             return .note
-        case let .image(attachmentPath, _, _, _):
+        case let .image(attachmentPath, _, _, _, _):
             return .image(attachmentPath: attachmentPath)
         }
     }
@@ -44,6 +45,7 @@ struct SearchableImageText: Equatable, Sendable {
     let markdownRange: NSRange
     let observationIndex: Int
     let text: String
+    let normalizedBoundingBox: CGRect
 }
 
 struct CurrentNoteFindMatch: Identifiable, Equatable, Sendable {
@@ -87,7 +89,8 @@ struct CurrentNoteFindEngine {
                             attachmentPath: line.attachmentPath,
                             markdownRange: line.markdownRange,
                             observationIndex: line.observationIndex,
-                            characterRange: range
+                            characterRange: range,
+                            normalizedBoundingBox: line.normalizedBoundingBox
                         )
                     )
                 }
@@ -145,7 +148,7 @@ struct CurrentNoteFindEngine {
         switch location {
         case let .note(range):
             return range.location * 2
-        case let .image(_, markdownRange, observationIndex, _):
+        case let .image(_, markdownRange, observationIndex, _, _):
             return markdownRange.location * 2 + min(observationIndex, 1)
         }
     }
@@ -293,7 +296,8 @@ final class CurrentNoteFindController: ObservableObject {
                         attachmentPath: reference.path,
                         markdownRange: reference.markdownRange,
                         observationIndex: index,
-                        text: observation.text
+                        text: observation.text,
+                        normalizedBoundingBox: observation.boundingBox
                     )
                 })
             }
