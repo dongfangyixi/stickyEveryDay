@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import XCTest
 @testable import Pinaday
@@ -328,6 +329,141 @@ final class CurrentNoteFindTests: XCTestCase {
         ))
     }
 
+    func testCurrentNoteFindEscapeShortcutAllowsPlainOrShiftEscapeOnly() {
+        XCTAssertTrue(CurrentNoteFindEscapeShortcut.matches(
+            keyCode: 53,
+            modifierFlags: []
+        ))
+        XCTAssertTrue(CurrentNoteFindEscapeShortcut.matches(
+            keyCode: 53,
+            modifierFlags: [.shift]
+        ))
+        XCTAssertFalse(CurrentNoteFindEscapeShortcut.matches(
+            keyCode: 53,
+            modifierFlags: [.command]
+        ))
+        XCTAssertFalse(CurrentNoteFindEscapeShortcut.matches(
+            keyCode: 36,
+            modifierFlags: []
+        ))
+    }
+
+    @MainActor
+    func testEscapeClearsThenClosesPresentedFindFromOutsideTheSearchField() {
+        let controller = CurrentNoteFindController()
+        controller.present()
+        controller.query = "needle"
+
+        XCTAssertTrue(controller.handleEscapeIfPresented())
+        XCTAssertEqual(controller.query, "")
+        XCTAssertTrue(controller.isPresented)
+
+        XCTAssertTrue(controller.handleEscapeIfPresented())
+        XCTAssertFalse(controller.isPresented)
+        XCTAssertFalse(controller.handleEscapeIfPresented())
+    }
+
+    func testEditorContextMenuPreservesNativeServicesAndAddsPinadayActionsAfterPasteGroup() throws {
+        let menu = NSMenu()
+        let lookupItem = NSMenuItem(
+            title: "Look Up",
+            action: Selector("lookUp:"),
+            keyEquivalent: ""
+        )
+        let pasteItem = NSMenuItem(
+            title: "Paste",
+            action: #selector(NSText.paste(_:)),
+            keyEquivalent: "v"
+        )
+        let pasteAndMatchStyleItem = NSMenuItem(
+            title: "Paste and Match Style",
+            action: #selector(NSTextView.pasteAsPlainText(_:)),
+            keyEquivalent: "v"
+        )
+        pasteAndMatchStyleItem.keyEquivalentModifierMask = [
+            .command, .option, .shift
+        ]
+        let shareItem = NSMenuItem(
+            title: "Share",
+            action: Selector("share:"),
+            keyEquivalent: ""
+        )
+        menu.addItem(lookupItem)
+        menu.addItem(pasteItem)
+        menu.addItem(pasteAndMatchStyleItem)
+        menu.addItem(.separator())
+        menu.addItem(shareItem)
+        let target = ContextMenuActionTarget()
+
+        let actions = [
+            EditorContextMenuAction(
+                title: "Find in Note",
+                action: #selector(ContextMenuActionTarget.findInNote(_:)),
+                keyEquivalent: "f",
+                modifierMask: [.command]
+            ),
+            EditorContextMenuAction(
+                title: "Go to Note",
+                action: #selector(ContextMenuActionTarget.goToNote(_:)),
+                keyEquivalent: "p",
+                modifierMask: [.command]
+            ),
+            EditorContextMenuAction(
+                title: "Back to today",
+                action: #selector(ContextMenuActionTarget.backToToday(_:))
+            )
+        ]
+        let updatedMenu = EditorContextMenuBuilder.addingPinadayActions(
+            to: menu,
+            target: target,
+            actions: actions
+        )
+
+        XCTAssertTrue(updatedMenu === menu)
+        XCTAssertTrue(updatedMenu.items.contains(where: { $0 === lookupItem }))
+        XCTAssertTrue(updatedMenu.items.contains(where: { $0 === pasteItem }))
+        XCTAssertTrue(updatedMenu.items.contains(where: {
+            $0 === pasteAndMatchStyleItem
+        }))
+        XCTAssertTrue(updatedMenu.items.contains(where: { $0 === shareItem }))
+        XCTAssertEqual(
+            updatedMenu.items.filter { !$0.isSeparatorItem }.map(\.title),
+            [
+                "Look Up",
+                "Paste",
+                "Paste and Match Style",
+                "Find in Note",
+                "Go to Note",
+                "Back to today",
+                "Share"
+            ]
+        )
+        let findItem = try XCTUnwrap(updatedMenu.items.first(where: {
+            $0.action == #selector(ContextMenuActionTarget.findInNote(_:))
+        }))
+        XCTAssertEqual(findItem.keyEquivalent, "f")
+        XCTAssertEqual(findItem.keyEquivalentModifierMask, [.command])
+        XCTAssertTrue(findItem.target === target)
+        let goToItem = try XCTUnwrap(updatedMenu.items.first(where: {
+            $0.action == #selector(ContextMenuActionTarget.goToNote(_:))
+        }))
+        XCTAssertEqual(goToItem.keyEquivalent, "p")
+        XCTAssertEqual(goToItem.keyEquivalentModifierMask, [.command])
+        XCTAssertTrue(goToItem.target === target)
+
+        _ = EditorContextMenuBuilder.addingPinadayActions(
+            to: menu,
+            target: target,
+            actions: actions
+        )
+        for action in actions {
+            XCTAssertEqual(
+                menu.items.filter { $0.action == action.action }.count,
+                1
+            )
+        }
+    }
+
     @MainActor
     func testControllerWrapsMatchesInBothDirections() {
         let controller = CurrentNoteFindController()
@@ -357,6 +493,12 @@ final class CurrentNoteFindTests: XCTestCase {
             locale: Locale(identifier: "en_US")
         )
     }
+}
+
+private final class ContextMenuActionTarget: NSObject {
+    @objc func findInNote(_ sender: Any?) {}
+    @objc func goToNote(_ sender: Any?) {}
+    @objc func backToToday(_ sender: Any?) {}
 }
 
 private extension CurrentNoteFindMatch {

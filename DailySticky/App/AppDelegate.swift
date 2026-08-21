@@ -142,6 +142,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.showNoteSearch()
                 return nil
             }
+            if CurrentNoteFindEscapeShortcut.matches(event),
+               self?.appState?.isNoteSearchPresented != true,
+               self?.stickyWindowController?.isWindowKey == true,
+               !(NSApp.keyWindow?.firstResponder is NSTextView),
+               self?.currentNoteFindController?.handleEscapeIfPresented() == true {
+                return nil
+            }
             return event
         }
     }
@@ -395,6 +402,23 @@ enum GoToNoteShortcut {
     ) -> Bool {
         let relevantModifiers = modifierFlags.intersection(.deviceIndependentFlagsMask)
         return charactersIgnoringModifiers?.lowercased() == "p" && relevantModifiers == .command
+    }
+}
+
+enum CurrentNoteFindEscapeShortcut {
+    static func matches(_ event: NSEvent) -> Bool {
+        matches(
+            keyCode: event.keyCode,
+            modifierFlags: event.modifierFlags
+        )
+    }
+
+    static func matches(
+        keyCode: UInt16,
+        modifierFlags: NSEvent.ModifierFlags
+    ) -> Bool {
+        let blockedModifiers: NSEvent.ModifierFlags = [.command, .control, .option]
+        return keyCode == 53 && modifierFlags.intersection(blockedModifiers).isEmpty
     }
 }
 

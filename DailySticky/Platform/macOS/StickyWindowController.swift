@@ -40,6 +40,10 @@ final class StickyWindowController: NSObject, NSWindowDelegate {
         window?.frame
     }
 
+    var isWindowKey: Bool {
+        window?.isKeyWindow == true
+    }
+
     func show() {
         if let window {
             window.makeKeyAndOrderFront(nil)

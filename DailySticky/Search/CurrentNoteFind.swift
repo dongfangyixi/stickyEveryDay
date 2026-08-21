@@ -221,6 +221,16 @@ final class CurrentNoteFindController: ObservableObject {
         return false
     }
 
+    @discardableResult
+    func handleEscapeIfPresented() -> Bool {
+        guard isPresented else {
+            return false
+        }
+
+        _ = handleEscape()
+        return true
+    }
+
     func update(page: DayPage, locale: Locale) {
         let dateChanged = self.page.dateKey != page.dateKey
         self.page = page

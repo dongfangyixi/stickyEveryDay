@@ -535,12 +535,37 @@ struct DailyStickyHelpView: View {
                         detail: "A Today button appears only when you are viewing another date."
                     )
                     HelpLine(
-                        "Return from search",
-                        detail: "After opening a search result, use the return-date button to go back to the day you searched from."
-                    )
-                    HelpLine(
                         "Pinned note",
                         detail: "Use the pin button to keep the sticky note above other windows."
+                    )
+                }
+
+                HelpSection(title: "Find and Go To") {
+                    HelpLine(
+                        "Find in this note",
+                        detail: "Press Cmd-F to find text in the note you are viewing. Each match is highlighted and brought into view.",
+                        syntax: "Cmd-F"
+                    )
+                    HelpLine(
+                        "Move through matches",
+                        detail: "Use the arrow buttons or press Return to move through matches. Escape clears the query first, then closes Find."
+                    )
+                    HelpLine(
+                        "Find text in images",
+                        detail: "Find also searches recognized text in pasted images and scrolls to the matching text."
+                    )
+                    HelpLine(
+                        "Go to any note",
+                        detail: "Press Cmd-P to search every day by note content or date. Use Up and Down, then Return to open a result.",
+                        syntax: "Cmd-P"
+                    )
+                    HelpLine(
+                        "Search by date",
+                        detail: "Type a date such as Aug 12. Go to Note supports fuzzy matching across Latin, Chinese, Japanese, and Korean text."
+                    )
+                    HelpLine(
+                        "Return to your day",
+                        detail: "After opening a Go to result, use the return-date chip in the header to go back to the day where you started."
                     )
                 }
 

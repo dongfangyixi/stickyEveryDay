@@ -18,7 +18,10 @@ struct StickyRootView: View {
             Divider()
                 .overlay(palette.separator)
 
-            DailyNoteEditorView(findController: currentNoteFindController)
+            DailyNoteEditorView(
+                findController: currentNoteFindController,
+                onGoToNote: onToggleNoteSearch
+            )
         }
         .frame(minWidth: 320, minHeight: 280)
         .background(palette.paper)

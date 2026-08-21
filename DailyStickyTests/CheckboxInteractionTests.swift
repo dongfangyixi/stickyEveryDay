@@ -4,6 +4,418 @@ import XCTest
 
 @MainActor
 final class CheckboxInteractionTests: XCTestCase {
+    func testCodeBlockLayoutIsStableAndDoesNotOverlapNeighboringLines() throws {
+        let (editor, window) = makeEditor()
+        editor.setText(
+            """
+            before
+            ```swift
+
+            ```
+            after
+            """
+        )
+        window.contentView?.layoutSubtreeIfNeeded()
+        editor.layoutSubtreeIfNeeded()
+
+        let emptyFrame = try XCTUnwrap(editor.codeBlockFramesForTesting().first)
+        let beforeFrame = try XCTUnwrap(editor.lineFrameForTesting(lineIndex: 0))
+        let afterFrame = try XCTUnwrap(editor.lineFrameForTesting(lineIndex: 2))
+        XCTAssertGreaterThanOrEqual(emptyFrame.minY, beforeFrame.maxY - 0.5)
+        XCTAssertLessThanOrEqual(emptyFrame.maxY, afterFrame.minY + 0.5)
+
+        editor.setText(
+            """
+            before
+            ```swift
+            let value = 1
+            ```
+            after
+            """
+        )
+        window.contentView?.layoutSubtreeIfNeeded()
+        editor.layoutSubtreeIfNeeded()
+
+        let populatedFrame = try XCTUnwrap(editor.codeBlockFramesForTesting().first)
+        let populatedBeforeFrame = try XCTUnwrap(editor.lineFrameForTesting(lineIndex: 0))
+        let populatedAfterFrame = try XCTUnwrap(editor.lineFrameForTesting(lineIndex: 2))
+        XCTAssertEqual(populatedFrame.height, emptyFrame.height, accuracy: 0.5)
+        XCTAssertGreaterThanOrEqual(populatedFrame.minY, populatedBeforeFrame.maxY - 0.5)
+        XCTAssertLessThanOrEqual(populatedFrame.maxY, populatedAfterFrame.minY + 0.5)
+    }
+
+    func testSlashCommandMatchingPrefersCodeNameOverTodoAlias() {
+        let (editor, _) = makeEditor()
+
+        XCTAssertEqual(editor.slashCommandRawValueForTesting(query: "c"), "codeBlock")
+        XCTAssertEqual(editor.slashCommandRawValueForTesting(query: "co"), "codeBlock")
+        XCTAssertEqual(editor.slashCommandRawValueForTesting(query: "code"), "codeBlock")
+        XCTAssertEqual(editor.slashCommandRawValueForTesting(query: "t"), "todo")
+        XCTAssertEqual(editor.slashCommandRawValueForTesting(query: "check"), "todo")
+        XCTAssertEqual(editor.slashCommandRawValueForTesting(query: "div"), "divider")
+    }
+
+    func testChangingCodeLanguageUpdatesTheWholeBlockAndMarkdownFence() {
+        let (editor, _) = makeEditor()
+        editor.setText(
+            """
+            ```swift
+            let first = 1
+            let second = 2
+            ```
+            """
+        )
+
+        XCTAssertTrue(editor.setCodeLanguageForTesting("go", atLine: 1))
+        XCTAssertEqual(editor.codeBlockLanguagesForTesting, ["go", "go"])
+        XCTAssertTrue(editor.text.hasPrefix("```go\n"))
+    }
+
+    func testCodeLanguageChipIsReachableWithAButtonCursor() {
+        let (editor, window) = makeEditor()
+        editor.setText(
+            """
+            ```swift
+            let value = 1
+            ```
+            """
+        )
+        window.contentView?.layoutSubtreeIfNeeded()
+        editor.layoutSubtreeIfNeeded()
+
+        XCTAssertTrue(editor.codeLanguageControlRespondsToHitTestingForTesting())
+    }
+
+    func testLinesAfterCodeBlockRemainMouseInteractiveInScrollableEditor() {
+        let editor = InlineTodoTextEditorContainer(
+            frame: NSRect(x: 0, y: 0, width: 220, height: 120),
+            palette: AppTheme.yellow,
+            dateKey: "2026-08-20"
+        )
+        let window = NSWindow(
+            contentRect: editor.frame,
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = editor
+        editor.setText(
+            """
+            before
+            ```python
+            import abc from b
+            run b with a
+            ```
+
+            first
+            second
+            third
+
+            fourth
+            """
+        )
+        window.contentView?.layoutSubtreeIfNeeded()
+        editor.layoutSubtreeIfNeeded()
+
+        let geometry = editor.textDocumentGeometryForTesting
+        XCTAssertGreaterThanOrEqual(
+            geometry.frame.height,
+            geometry.usedRect.maxY,
+            "The text view must contain every line that AppKit draws"
+        )
+        for lineIndex in 3...8 {
+            XCTAssertTrue(
+                editor.mouseCanPlaceCaretForTesting(lineIndex: lineIndex, utf16Offset: 0),
+                "Line \(lineIndex) must remain reachable through real view hit testing"
+            )
+        }
+    }
+
+    func testEmptyCodeBlockDoesNotMoveWhenFirstTextIsTyped() throws {
+        let (editor, window) = makeEditor()
+        editor.setText(
+            """
+            before
+            ```python
+
+            ```
+            after
+            """
+        )
+        window.contentView?.layoutSubtreeIfNeeded()
+        editor.layoutSubtreeIfNeeded()
+
+        let emptyFrame = try XCTUnwrap(editor.codeBlockFramesForTesting().first)
+        let emptyLineFrame = try XCTUnwrap(editor.lineFrameForTesting(lineIndex: 1))
+
+        XCTAssertTrue(editor.typeTextForTesting("print('hello')", atLine: 1, utf16Offset: 0))
+        window.contentView?.layoutSubtreeIfNeeded()
+        editor.layoutSubtreeIfNeeded()
+
+        let populatedFrame = try XCTUnwrap(editor.codeBlockFramesForTesting().first)
+        let populatedLineFrame = try XCTUnwrap(editor.lineFrameForTesting(lineIndex: 1))
+        XCTAssertEqual(populatedFrame.minY, emptyFrame.minY, accuracy: 0.5)
+        XCTAssertEqual(populatedFrame.maxY, emptyFrame.maxY, accuracy: 0.5)
+        XCTAssertEqual(populatedLineFrame.minY, emptyLineFrame.minY, accuracy: 0.5)
+        XCTAssertEqual(populatedLineFrame.maxY, emptyLineFrame.maxY, accuracy: 0.5)
+    }
+
+    func testFinalEmptyCodeBlockCreatedFromSlashDoesNotMoveWhenFirstTextIsTyped() throws {
+        let (editor, window) = makeEditor()
+        editor.setText("")
+        editor.typeTextForTesting("/c")
+        editor.pressReturnForTesting()
+        window.contentView?.layoutSubtreeIfNeeded()
+        editor.layoutSubtreeIfNeeded()
+
+        let emptyFrame = try XCTUnwrap(editor.codeBlockFramesForTesting().first)
+        let emptyLineFrame = try XCTUnwrap(editor.lineFrameForTesting(lineIndex: 0))
+
+        editor.typeTextForTesting("print('hello')")
+        window.contentView?.layoutSubtreeIfNeeded()
+        editor.layoutSubtreeIfNeeded()
+
+        let populatedFrame = try XCTUnwrap(editor.codeBlockFramesForTesting().first)
+        let populatedLineFrame = try XCTUnwrap(editor.lineFrameForTesting(lineIndex: 0))
+        XCTAssertEqual(populatedFrame.minY, emptyFrame.minY, accuracy: 0.5)
+        XCTAssertEqual(populatedFrame.maxY, emptyFrame.maxY, accuracy: 0.5)
+        XCTAssertEqual(populatedLineFrame.minY, emptyLineFrame.minY, accuracy: 0.5)
+        XCTAssertEqual(populatedLineFrame.maxY, emptyLineFrame.maxY, accuracy: 0.5)
+    }
+
+    func testIncrementalCodeBlockEditingKeepsFollowingLinesMouseInteractive() {
+        let editor = InlineTodoTextEditorContainer(
+            frame: NSRect(x: 0, y: 0, width: 220, height: 150),
+            palette: AppTheme.yellow,
+            dateKey: "2026-08-20"
+        )
+        let window = NSWindow(
+            contentRect: editor.frame,
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = editor
+        editor.setText("")
+        editor.typeTextForTesting("sfd\n```python\nimport abc from b\nrun b with a\n```\n\ndsf\nsdf\nsdf\n\nsdf")
+        window.contentView?.layoutSubtreeIfNeeded()
+        editor.layoutSubtreeIfNeeded()
+
+        let geometry = editor.textDocumentGeometryForTesting
+        XCTAssertGreaterThanOrEqual(geometry.frame.height, geometry.usedRect.maxY)
+        for lineIndex in 3...8 {
+            XCTAssertTrue(
+                editor.mouseCanPlaceCaretForTesting(lineIndex: lineIndex, utf16Offset: 0),
+                "The leading edge of line \(lineIndex) must accept mouse placement"
+            )
+            XCTAssertTrue(
+                editor.mouseCanPlaceCaretForTesting(lineIndex: lineIndex, utf16Offset: 2),
+                "The text of line \(lineIndex) must accept mouse placement"
+            )
+        }
+    }
+
+    func testNormalLineBetweenCodeBlocksHasVisibleMargins() throws {
+        let (editor, window) = makeEditor()
+        editor.setText(
+            """
+            ```swift
+            first
+            ```
+            middle
+            ```swift
+            second
+            ```
+            """
+        )
+        window.contentView?.layoutSubtreeIfNeeded()
+        editor.layoutSubtreeIfNeeded()
+
+        let codeFrames = editor.codeBlockFramesForTesting()
+        XCTAssertEqual(codeFrames.count, 2)
+        let firstCodeFrame = try XCTUnwrap(codeFrames.first)
+        let secondCodeFrame = try XCTUnwrap(codeFrames.last)
+        let firstCodeLineFrame = try XCTUnwrap(editor.lineFrameForTesting(lineIndex: 0))
+        let middleLineFrame = try XCTUnwrap(editor.lineFrameForTesting(lineIndex: 1))
+
+        XCTAssertLessThanOrEqual(
+            firstCodeFrame.maxY + 3,
+            middleLineFrame.minY,
+            "The first code block must leave a visible margin before the normal line. "
+                + "code=\(firstCodeFrame), codeLine=\(firstCodeLineFrame), line=\(middleLineFrame)"
+        )
+        XCTAssertLessThanOrEqual(
+            middleLineFrame.maxY + 3,
+            secondCodeFrame.minY,
+            "The second code block must leave a visible margin after the normal line. "
+                + "line=\(middleLineFrame), code=\(secondCodeFrame)"
+        )
+    }
+
+    func testMouseCanPlaceCaretAndDragSelectionAcrossLinesAfterCodeBlock() {
+        let editor = InlineTodoTextEditorContainer(
+            frame: NSRect(x: 0, y: 0, width: 220, height: 150),
+            palette: AppTheme.yellow,
+            dateKey: "2026-08-20"
+        )
+        let window = NSWindow(
+            contentRect: editor.frame,
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        defer { window.close() }
+        window.contentView = editor
+        editor.setText(
+            """
+            before
+            ```python
+            import abc from b
+            run b with a
+            ```
+
+            first
+            second
+            third
+
+            fourth
+            """
+        )
+        window.contentView?.layoutSubtreeIfNeeded()
+        editor.layoutSubtreeIfNeeded()
+
+        XCTAssertTrue(editor.mouseCanPlaceCaretForTesting(lineIndex: 8, utf16Offset: 2))
+        XCTAssertTrue(editor.dragSelectWithMouseEventsForTesting(
+            fromLine: 5,
+            utf16Offset: 0,
+            toLine: 8,
+            utf16EndOffset: 3
+        ))
+        XCTAssertTrue(editor.selectedTextForTesting.contains("second"))
+        XCTAssertTrue(editor.selectedTextForTesting.contains("third"))
+    }
+
+    func testTrailingLinesRemainInteractiveWhenCodeBlockIsBuiltLineByLine() {
+        let (editor, window) = makeEditor()
+        editor.setText("")
+        editor.typeTextForTesting("sfd")
+        editor.pressReturnForTesting()
+        editor.typeTextForTesting("```python")
+        editor.pressReturnForTesting()
+        editor.typeTextForTesting("import abc from b")
+        editor.pressReturnForTesting()
+        editor.typeTextForTesting("run b with a")
+        editor.pressReturnForTesting()
+        editor.typeTextForTesting("```")
+        editor.pressReturnForTesting()
+        editor.pressReturnForTesting()
+        let trailingLines = ["dsf", "sdf", "sdf", "", "sdf"]
+        for (index, text) in trailingLines.enumerated() {
+            editor.typeTextForTesting(text)
+            if index < trailingLines.count - 1 {
+                editor.pressReturnForTesting()
+            }
+        }
+        window.contentView?.layoutSubtreeIfNeeded()
+        editor.layoutSubtreeIfNeeded()
+
+        let lines = editor.presentationTextForTesting.components(separatedBy: "\n")
+        let geometry = editor.textDocumentGeometryForTesting
+        XCTAssertGreaterThanOrEqual(geometry.frame.height, geometry.usedRect.maxY)
+        for lineIndex in max(0, lines.count - 5)..<lines.count {
+            XCTAssertTrue(
+                editor.mouseCanPlaceCaretForTesting(lineIndex: lineIndex, utf16Offset: 0),
+                "Incrementally created trailing line \(lineIndex) must accept a mouse click"
+            )
+        }
+    }
+
+    func testLoadingLanguageTaggedAndPlainEmptyFencesCreatesCodeBlocks() {
+        let (editor, _) = makeEditor()
+        editor.setText(
+            """
+            ```python
+            ```
+
+            ```
+            ```
+            """
+        )
+
+        XCTAssertFalse(editor.presentationTextForTesting.contains("```"))
+        XCTAssertEqual(editor.codeBlockLanguagesForTesting, ["python", nil])
+        XCTAssertTrue(editor.text.contains("```python\n\n```"))
+    }
+
+    func testPastingFencedMarkdownUsesStructuredCodeBlockPresentation() {
+        let (editor, _) = makeEditor()
+        editor.setText("")
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(
+            """
+            ```go
+            fmt.Println("hello")
+            ```
+            """,
+            forType: .string
+        )
+
+        editor.pasteFromGeneralPasteboardForTesting()
+
+        XCTAssertEqual(editor.presentationTextForTesting, "fmt.Println(\"hello\")")
+        XCTAssertEqual(editor.codeBlockLanguagesForTesting, ["go"])
+        XCTAssertEqual(
+            editor.text,
+            """
+            ```go
+            fmt.Println("hello")
+            ```
+            """
+        )
+    }
+
+    func testReturnPromotesTypedLanguageFenceAndBareFenceClosesBlock() {
+        let (editor, _) = makeEditor()
+        editor.setText("")
+
+        editor.typeTextForTesting("```python")
+        editor.pressReturnForTesting()
+
+        XCTAssertEqual(editor.presentationTextForTesting, "")
+        XCTAssertEqual(editor.codeBlockLanguagesForTesting, ["python"])
+
+        editor.typeTextForTesting("print('hello')")
+        editor.pressReturnForTesting()
+        editor.typeTextForTesting("```")
+        editor.pressReturnForTesting()
+
+        XCTAssertEqual(editor.presentationTextForTesting, "print('hello')\n")
+        XCTAssertEqual(editor.codeBlockLanguagesForTesting, ["python"])
+        XCTAssertEqual(
+            editor.text,
+            """
+            ```python
+            print('hello')
+            ```
+
+            """
+        )
+    }
+
+    func testCopyingAnImagePublishesImageDataWithoutMarkdownText() {
+        let (editor, _) = makeEditor()
+        let image = NSImage(size: NSSize(width: 24, height: 18))
+        image.lockFocus()
+        NSColor.systemGreen.setFill()
+        NSRect(origin: .zero, size: image.size).fill()
+        image.unlockFocus()
+
+        XCTAssertTrue(editor.copyImageForTesting(image))
+        XCTAssertNotNil(NSPasteboard.general.data(forType: .png))
+        XCTAssertNotNil(NSPasteboard.general.data(forType: .tiff))
+        XCTAssertNil(NSPasteboard.general.string(forType: .string))
+    }
+
     func testPastingTaskIntoBlankLinePreservesFollowingTaskIdentity() {
         let (editor, window) = makeEditor()
         editor.setText(

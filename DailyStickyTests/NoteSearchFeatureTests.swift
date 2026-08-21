@@ -440,7 +440,14 @@ final class NoteSearchFeatureTests: XCTestCase {
                 "Search notes or enter a date",
                 "No matching notes or dates",
                 "Empty note",
-                "Clear query"
+                "Clear query",
+                "Find and Go To",
+                "Find in this note",
+                "Move through matches",
+                "Find text in images",
+                "Go to any note",
+                "Search by date",
+                "Return to your day"
             ] {
                 XCTAssertNotEqual(
                     language.localized(key),

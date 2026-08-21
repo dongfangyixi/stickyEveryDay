@@ -22,6 +22,16 @@ private enum TodoLayout {
     }
 }
 
+private enum CodeBlockLayout {
+    static let verticalPadding: CGFloat = 5
+    static let externalMargin: CGFloat = 6
+    static let contentLineSpacing: CGFloat = 2
+    static let horizontalInset: CGFloat = 1
+    static let languageChipHeight: CGFloat = 16
+    static let languageChipHorizontalPadding: CGFloat = 6
+    static let languageChipTrailingPadding: CGFloat = 6
+}
+
 enum OCRSearchRevealGeometry {
     static func displayRect(
         for normalizedRect: CGRect,
@@ -168,6 +178,7 @@ private enum MarkdownTableCellRenderer {
 struct DailyNoteEditorView: View {
     @EnvironmentObject private var appState: AppState
     @ObservedObject var findController: CurrentNoteFindController
+    let onGoToNote: () -> Void
 
     var body: some View {
         let palette = appState.themePalette
@@ -186,6 +197,17 @@ struct DailyNoteEditorView: View {
                 findMatches: findController.matches,
                 selectedFindMatchID: findController.selectedMatch?.id,
                 revealRequest: appState.noteRevealRequest,
+                isShowingToday: appState.isShowingToday,
+                onFindInNote: {
+                    findController.present()
+                },
+                onGoToNote: onGoToNote,
+                onBackToToday: {
+                    appState.jumpToToday()
+                },
+                onUnhandledEscape: {
+                    findController.handleEscapeIfPresented()
+                },
                 text: Binding(
                     get: {
                         appState.currentPage.noteText
@@ -229,6 +251,11 @@ private struct InlineTodoTextEditor: NSViewRepresentable {
     var findMatches: [CurrentNoteFindMatch]
     var selectedFindMatchID: String?
     var revealRequest: NoteRevealRequest?
+    var isShowingToday: Bool
+    var onFindInNote: () -> Void
+    var onGoToNote: () -> Void
+    var onBackToToday: () -> Void
+    var onUnhandledEscape: () -> Bool
     @Binding var text: String
 
     func makeCoordinator() -> Coordinator {
@@ -244,6 +271,11 @@ private struct InlineTodoTextEditor: NSViewRepresentable {
         view.onTextChange = { [coordinator = context.coordinator] newText in
             coordinator.text.wrappedValue = newText
         }
+        view.onFindInNote = onFindInNote
+        view.onGoToNote = onGoToNote
+        view.onBackToToday = onBackToToday
+        view.onUnhandledEscape = onUnhandledEscape
+        view.setIsShowingToday(isShowingToday)
         view.setText(text)
         view.setFindMatches(
             query: findQuery,
@@ -259,6 +291,11 @@ private struct InlineTodoTextEditor: NSViewRepresentable {
         nsView.setTheme(palette)
         nsView.setLanguage(language)
         nsView.setDateKey(dateKey)
+        nsView.onFindInNote = onFindInNote
+        nsView.onGoToNote = onGoToNote
+        nsView.onBackToToday = onBackToToday
+        nsView.onUnhandledEscape = onUnhandledEscape
+        nsView.setIsShowingToday(isShowingToday)
         nsView.setFindMatches(
             query: findQuery,
             matches: findMatches,
@@ -653,46 +690,65 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             }
         }
 
-        func matches(query: String, language: AppLanguage) -> Bool {
+        func matchRank(query: String, language: AppLanguage) -> Int? {
             let normalizedQuery = query
                 .trimmingCharacters(in: .whitespacesAndNewlines)
                 .lowercased()
 
             guard !normalizedQuery.isEmpty else {
-                return self == .todo
+                return self == .todo ? 0 : nil
             }
 
-            let searchTerms: [String]
+            let canonicalTerms: [String]
+            let aliasTerms: [String]
             switch self {
             case .todo:
-                searchTerms = ["todo list", "todo", "task", "check", "checkbox"]
+                canonicalTerms = ["todo list", "todo"]
+                aliasTerms = ["task", "check", "checkbox"]
             case .heading1:
-                searchTerms = ["heading 1", "heading1", "h1", "title"]
+                canonicalTerms = ["heading 1", "heading1", "h1"]
+                aliasTerms = ["title"]
             case .heading2:
-                searchTerms = ["heading 2", "heading2", "h2"]
+                canonicalTerms = ["heading 2", "heading2", "h2"]
+                aliasTerms = []
             case .heading3:
-                searchTerms = ["heading 3", "heading3", "h3"]
+                canonicalTerms = ["heading 3", "heading3", "h3"]
+                aliasTerms = []
             case .heading4:
-                searchTerms = ["heading 4", "heading4", "h4"]
+                canonicalTerms = ["heading 4", "heading4", "h4"]
+                aliasTerms = []
             case .bulletedList:
-                searchTerms = ["bulleted list", "bulleted", "bullet", "ul", "list"]
+                canonicalTerms = ["bulleted list", "bulleted", "bullet"]
+                aliasTerms = ["ul", "list"]
             case .numberedList:
-                searchTerms = ["numbered list", "numbered", "number", "ol"]
+                canonicalTerms = ["numbered list", "numbered", "number"]
+                aliasTerms = ["ol"]
             case .quote:
-                searchTerms = ["quote", "blockquote"]
+                canonicalTerms = ["quote"]
+                aliasTerms = ["blockquote"]
             case .codeBlock:
                 if normalizedQuery.hasPrefix("code ") || normalizedQuery.hasPrefix("```") {
-                    return true
+                    return 0
                 }
-                searchTerms = ["code block", "codeblock", "code"]
+                canonicalTerms = ["code block", "codeblock", "code"]
+                aliasTerms = []
             case .divider:
-                searchTerms = ["divider", "separator", "splitter", "spliter", "hr", "rule", "---"]
+                canonicalTerms = ["divider"]
+                aliasTerms = ["separator", "splitter", "spliter", "hr", "rule", "---"]
             }
 
-            return title(language: language)
+            if title(language: language)
                 .lowercased(with: language.locale)
-                .hasPrefix(normalizedQuery)
-                || searchTerms.contains { $0.hasPrefix(normalizedQuery) }
+                .hasPrefix(normalizedQuery) {
+                return 0
+            }
+            if canonicalTerms.contains(where: { $0.hasPrefix(normalizedQuery) }) {
+                return 1
+            }
+            if aliasTerms.contains(where: { $0.hasPrefix(normalizedQuery) }) {
+                return 2
+            }
+            return nil
         }
     }
 
@@ -719,6 +775,12 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
 
     private struct MarkdownCodeRenderBlock {
         var lineRange: Range<Int>
+        var language: String?
+    }
+
+    private struct MarkdownCodeFence: Equatable {
+        var marker: Character
+        var length: Int
         var language: String?
     }
 
@@ -803,6 +865,8 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     private var isRefreshingSelectionDisplay = false
     private var slashCommandContext: SlashCommandContext?
     private var selectedSlashCommandIndex = 0
+    private var pendingCodeLanguageLineRange: Range<Int>?
+    private var pendingCodeLanguage: String?
     private var sourceMarkdownText = ""
     private var findQuery = ""
     private var findMatches: [CurrentNoteFindMatch] = []
@@ -812,6 +876,10 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     private var lastHandledRevealRequestID: UUID?
 
     var onTextChange: ((String) -> Void)?
+    var onFindInNote: (() -> Void)?
+    var onGoToNote: (() -> Void)?
+    var onBackToToday: (() -> Void)?
+    var onUnhandledEscape: (() -> Bool)?
 
     var text: String {
         markdownText()
@@ -869,7 +937,6 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         }
 
         self.language = language
-        imageInteractionView.language = language
         configureSlashCommands()
     }
 
@@ -881,6 +948,11 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             lastHandledRevealRequestID = nil
         }
         self.dateKey = dateKey
+    }
+
+    func setIsShowingToday(_ isShowingToday: Bool) {
+        textView.isShowingToday = isShowingToday
+        imageInteractionView.isShowingToday = isShowingToday
     }
 
     func setFindMatches(
@@ -1065,6 +1137,10 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
                 return insertSoftLineBreak()
             }
 
+            if applyTypedCodeFenceBeforeReturnIfNeeded() {
+                return true
+            }
+
             return insertReturn()
 
         case #selector(NSResponder.insertTab(_:)):
@@ -1091,7 +1167,7 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
                 return true
             }
 
-            return false
+            return onUnhandledEscape?() ?? false
 
         case #selector(NSResponder.deleteBackward(_:)):
             if textView.selectedRange().length > 0 {
@@ -1244,13 +1320,30 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             }
 
             return self.pasteImageFromPasteboard()
-                || self.pasteMarkdownTasksFromPasteboard()
+                || self.pasteStructuredMarkdownFromPasteboard()
         }
         textView.canPasteHandler = {
             Self.canPasteImage(from: .general) || NSPasteboard.general.string(forType: .string) != nil
         }
+        textView.findInNoteTitle = language.localized("Find in Note")
+        textView.findInNoteHandler = { [weak self] in
+            self?.onFindInNote?()
+        }
+        textView.goToNoteHandler = { [weak self] in
+            self?.onGoToNote?()
+        }
+        textView.backToTodayHandler = { [weak self] in
+            self?.onBackToToday?()
+        }
         overlayView.onToggleCheckbox = { [weak self] lineIndex in
             self?.toggleCheckbox(at: lineIndex)
+        }
+        overlayView.onChooseCodeLanguage = { [weak self] lineRange, language, anchorRect in
+            self?.showCodeLanguageMenu(
+                for: lineRange,
+                currentLanguage: language,
+                anchorRect: anchorRect
+            )
         }
         textView.checkboxCursorProvider = { [weak self] point in
             guard let self else {
@@ -1292,6 +1385,15 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         }
         imageInteractionView.onCopyImage = { [weak self] item in
             self?.copyImageToPasteboard(item) ?? false
+        }
+        imageInteractionView.onFindInNote = { [weak self] in
+            self?.onFindInNote?()
+        }
+        imageInteractionView.onGoToNote = { [weak self] in
+            self?.onGoToNote?()
+        }
+        imageInteractionView.onBackToToday = { [weak self] in
+            self?.onBackToToday?()
         }
 
         imageOverlayView.translatesAutoresizingMaskIntoConstraints = false
@@ -1354,6 +1456,10 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     }
 
     private func configureSlashCommands() {
+        textView.findInNoteTitle = language.localized("Find in Note")
+        textView.goToNoteTitle = language.localized("Go to Note")
+        textView.backToTodayTitle = language.localized("Back to today")
+        imageInteractionView.language = language
         slashPaletteView.configure(
             commands: SlashCommand.allCases.map { command in
                 (
@@ -1568,14 +1674,11 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             return
         }
 
-        let commands = SlashCommand.allCases
         let normalizedQuery = context.query.trimmingCharacters(in: .whitespacesAndNewlines)
         let matchingIndex: Int
         if normalizedQuery.isEmpty {
             matchingIndex = 0
-        } else if let index = commands.firstIndex(where: {
-            $0.matches(query: normalizedQuery, language: language)
-        }) {
+        } else if let index = bestSlashCommandIndex(for: normalizedQuery) {
             matchingIndex = index
         } else {
             hideSlashCommandPalette()
@@ -1754,9 +1857,24 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             return .todo
         }
 
-        return commands.first(where: {
-            $0.matches(query: context.query, language: language)
-        })
+        guard let index = bestSlashCommandIndex(for: context.query) else {
+            return nil
+        }
+        return commands[index]
+    }
+
+    private func bestSlashCommandIndex(for query: String) -> Int? {
+        var bestMatch: (index: Int, rank: Int)?
+        for (index, command) in SlashCommand.allCases.enumerated() {
+            guard let rank = command.matchRank(query: query, language: language) else {
+                continue
+            }
+
+            if bestMatch == nil || rank < bestMatch!.rank {
+                bestMatch = (index, rank)
+            }
+        }
+        return bestMatch?.index
     }
 
     private func codeLanguage(fromSlashQuery query: String) -> String? {
@@ -1785,6 +1903,149 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         }
 
         return language
+    }
+
+    private static let commonCodeLanguages: [(title: String, identifier: String)] = [
+        ("Swift", "swift"),
+        ("Python", "python"),
+        ("JavaScript", "javascript"),
+        ("TypeScript", "typescript"),
+        ("Go", "go"),
+        ("Rust", "rust"),
+        ("Java", "java"),
+        ("Kotlin", "kotlin"),
+        ("C", "c"),
+        ("C++", "cpp"),
+        ("C#", "csharp"),
+        ("Objective-C", "objective-c"),
+        ("Shell", "shell"),
+        ("SQL", "sql"),
+        ("JSON", "json"),
+        ("YAML", "yaml"),
+        ("HTML", "html"),
+        ("CSS", "css"),
+        ("Markdown", "markdown")
+    ]
+
+    private func showCodeLanguageMenu(
+        for lineRange: Range<Int>,
+        currentLanguage: String?,
+        anchorRect: NSRect
+    ) {
+        pendingCodeLanguageLineRange = lineRange
+        pendingCodeLanguage = currentLanguage
+
+        let menu = NSMenu(title: language.localized("Code block language"))
+        menu.autoenablesItems = false
+
+        let plainTextItem = NSMenuItem(
+            title: language.localized("Plain text"),
+            action: #selector(selectCodeLanguageFromMenu(_:)),
+            keyEquivalent: ""
+        )
+        plainTextItem.target = self
+        plainTextItem.representedObject = ""
+        plainTextItem.state = currentLanguage == nil ? .on : .off
+        menu.addItem(plainTextItem)
+        menu.addItem(.separator())
+
+        for choice in Self.commonCodeLanguages {
+            let item = NSMenuItem(
+                title: choice.title,
+                action: #selector(selectCodeLanguageFromMenu(_:)),
+                keyEquivalent: ""
+            )
+            item.target = self
+            item.representedObject = choice.identifier
+            item.state = currentLanguage?.lowercased() == choice.identifier ? .on : .off
+            menu.addItem(item)
+        }
+
+        menu.addItem(.separator())
+        let otherItem = NSMenuItem(
+            title: language.localized("Other language…"),
+            action: #selector(selectOtherCodeLanguage(_:)),
+            keyEquivalent: ""
+        )
+        otherItem.target = self
+        menu.addItem(otherItem)
+
+        menu.popUp(
+            positioning: nil,
+            at: NSPoint(x: anchorRect.minX, y: anchorRect.maxY + 2),
+            in: overlayView
+        )
+    }
+
+    @objc private func selectCodeLanguageFromMenu(_ sender: NSMenuItem) {
+        guard let rawLanguage = sender.representedObject as? String else {
+            return
+        }
+        applyCodeLanguage(rawLanguage.isEmpty ? nil : rawLanguage)
+    }
+
+    @objc private func selectOtherCodeLanguage(_ sender: NSMenuItem) {
+        guard let window else {
+            return
+        }
+
+        let alert = NSAlert()
+        alert.messageText = language.localized("Code block language")
+        alert.informativeText = language.localized("Enter a Markdown language identifier.")
+        alert.addButton(withTitle: language.localized("Set"))
+        alert.addButton(withTitle: language.localized("Cancel"))
+
+        let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        input.placeholderString = "swift, python, go…"
+        input.stringValue = pendingCodeLanguage ?? ""
+        alert.accessoryView = input
+
+        alert.beginSheetModal(for: window) { [weak self, weak input] response in
+            guard response == .alertFirstButtonReturn,
+                  let self,
+                  let input
+            else {
+                return
+            }
+
+            let identifier = input.stringValue
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+            guard !identifier.isEmpty,
+                  identifier.rangeOfCharacter(
+                    from: CharacterSet(charactersIn: "` \t\n")
+                  ) == nil
+            else {
+                return
+            }
+            self.applyCodeLanguage(identifier)
+        }
+    }
+
+    private func applyCodeLanguage(_ language: String?) {
+        guard let lineRange = pendingCodeLanguageLineRange,
+              !lineRange.isEmpty
+        else {
+            return
+        }
+
+        let undoSnapshot = editorSnapshot()
+        var didChange = false
+        for lineIndex in lineRange where lineKinds.indices.contains(lineIndex) {
+            guard case .codeBlock(let existingLanguage) = lineKinds[lineIndex],
+                  existingLanguage != language
+            else {
+                continue
+            }
+            lineKinds[lineIndex] = .codeBlock(language: language)
+            didChange = true
+        }
+
+        guard didChange else {
+            return
+        }
+        notifyTextChangedAndRefresh(scrollSelection: false)
+        registerUndoSnapshotIfChanged(from: undoSnapshot)
     }
 
     private func slashCommandContextForReturn() -> SlashCommandContext? {
@@ -2582,15 +2843,6 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             didWriteImage = pasteboardItem.setData(tiffData, forType: .tiff) || didWriteImage
         }
 
-        let infos = lineInfos()
-        if infos.indices.contains(item.lineIndex),
-           let reference = imageReference(in: infos[item.lineIndex].text) {
-            pasteboardItem.setString(
-                markdownImageLine(for: reference, width: reference.width),
-                forType: .string
-            )
-        }
-
         guard didWriteImage else {
             return false
         }
@@ -2762,17 +3014,17 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         return "\(needsLeadingNewline ? "\n" : "")\(markdownLine)\(needsTrailingNewline ? "\n" : "")"
     }
 
-    private func pasteMarkdownTasksFromPasteboard() -> Bool {
+    private func pasteStructuredMarkdownFromPasteboard() -> Bool {
         guard let pastedText = NSPasteboard.general.string(forType: .string),
-              Self.containsTaskMarkdown(in: pastedText)
+              Self.containsStructuredMarkdown(in: pastedText)
         else {
             return false
         }
 
-        return pasteMarkdownTasks(pastedText)
+        return pasteStructuredMarkdown(pastedText)
     }
 
-    private func pasteMarkdownTasks(_ pastedText: String) -> Bool {
+    private func pasteStructuredMarkdown(_ pastedText: String) -> Bool {
         let selectedRange = textView.selectedRange()
         let document = Self.displayDocument(from: pastedText)
         let replacementLength = (document.text as NSString).length
@@ -2782,6 +3034,43 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             replacement: document,
             selectedRange: NSRange(location: selectedRange.location + replacementLength, length: 0)
         )
+    }
+
+    private func applyTypedCodeFenceBeforeReturnIfNeeded() -> Bool {
+        let selectedRange = textView.selectedRange()
+        guard selectedRange.length == 0,
+              let line = lineInfo(at: selectedRange.location),
+              selectedRange.location == NSMaxRange(line.contentRange)
+        else {
+            return false
+        }
+
+        switch kind(at: line.index) {
+        case .normal:
+            guard let fence = Self.parseOpeningCodeFence(line.text) else {
+                return false
+            }
+            return promoteTypedLine(
+                line,
+                selectedRange: selectedRange,
+                replacement: "",
+                kind: .codeBlock(language: fence.language)
+            )
+
+        case .codeBlock:
+            guard Self.isBareCodeFenceLine(line.text) else {
+                return false
+            }
+            return promoteTypedLine(
+                line,
+                selectedRange: selectedRange,
+                replacement: "",
+                kind: .normal
+            )
+
+        default:
+            return false
+        }
     }
 
     private func promoteTypedMarkdownTaskIfNeeded() -> Bool {
@@ -3126,7 +3415,82 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         textView.setSelectedRange(
             NSRange(location: infos[lineIndex].contentRange.location, length: 0)
         )
-        return pasteMarkdownTasks(markdown)
+        return pasteStructuredMarkdown(markdown)
+    }
+
+    func pasteFromGeneralPasteboardForTesting() {
+        textView.paste(nil)
+    }
+
+    var codeBlockLanguagesForTesting: [String?] {
+        lineKinds.reduce(into: [String?]()) { languages, kind in
+            if case .codeBlock(let language) = kind {
+                languages.append(language)
+            }
+        }
+    }
+
+    func slashCommandRawValueForTesting(query: String) -> String? {
+        guard let index = bestSlashCommandIndex(for: query) else {
+            return nil
+        }
+        return SlashCommand.allCases[index].rawValue
+    }
+
+    func codeBlockFramesForTesting() -> [NSRect] {
+        layoutSubtreeIfNeeded()
+        refreshOverlay()
+        return overlayView.codeBlockFramesForTesting
+    }
+
+    func codeLanguageControlRespondsToHitTestingForTesting() -> Bool {
+        layoutSubtreeIfNeeded()
+        refreshOverlay()
+        guard let point = overlayView.codeLanguageTargetCenterForTesting else {
+            return false
+        }
+
+        let pointInContainer = convert(point, from: overlayView)
+        return hitTest(pointInContainer) === overlayView
+            && overlayView.codeLanguageCursorForTesting(at: point) === NSCursor.pointingHand
+    }
+
+    func lineFrameForTesting(lineIndex: Int) -> NSRect? {
+        let infos = lineInfos()
+        guard infos.indices.contains(lineIndex),
+              let layoutManager = textView.layoutManager,
+              let textContainer = textView.textContainer
+        else {
+            return nil
+        }
+
+        layoutManager.ensureLayout(for: textContainer)
+        guard let rect = lineFragmentRect(for: infos[lineIndex], layoutManager: layoutManager) else {
+            return nil
+        }
+
+        let visibleBounds = scrollView.contentView.bounds
+        let origin = textView.textContainerOrigin
+        return NSRect(
+            x: origin.x + rect.minX - visibleBounds.origin.x,
+            y: origin.y + rect.minY - visibleBounds.origin.y,
+            width: rect.width,
+            height: rect.height
+        )
+    }
+
+    @discardableResult
+    func setCodeLanguageForTesting(_ language: String?, atLine lineIndex: Int) -> Bool {
+        let infos = lineInfos()
+        guard let block = markdownCodeRenderBlocks(lineInfos: infos).first(where: {
+            $0.lineRange.contains(lineIndex)
+        }) else {
+            return false
+        }
+
+        pendingCodeLanguageLineRange = block.lineRange
+        applyCodeLanguage(language)
+        return true
     }
 
     func deleteLineForTesting(lineIndex: Int) -> Bool {
@@ -3272,6 +3636,19 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         return NSPasteboard.general.string(forType: .string)
     }
 
+    func copyImageForTesting(_ image: NSImage) -> Bool {
+        copyImageToPasteboard(
+            MarkdownImageOverlayItem(
+                attachmentPath: "attachments/test.png",
+                image: image,
+                altText: "test",
+                frame: .zero,
+                lineIndex: 0,
+                isSelected: true
+            )
+        )
+    }
+
     func insertionLocationAtNumberedPrefixCharacterForTesting(
         lineIndex: Int,
         characterOffset: Int
@@ -3411,6 +3788,186 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         }
 
         return textView.characterIndexForInsertion(at: point)
+    }
+
+    func mouseCanPlaceCaretForTesting(lineIndex: Int, utf16Offset: Int) -> Bool {
+        let infos = lineInfos()
+        guard infos.indices.contains(lineIndex),
+              let layoutManager = textView.layoutManager,
+              let textContainer = textView.textContainer
+        else {
+            return false
+        }
+
+        let line = infos[lineIndex]
+        let boundedOffset = max(0, min(utf16Offset, line.contentRange.length))
+        let targetLocation = line.contentRange.location + boundedOffset
+        textView.scrollRangeToVisible(NSRange(location: targetLocation, length: 0))
+        layoutSubtreeIfNeeded()
+        layoutManager.ensureLayout(for: textContainer)
+
+        guard let lineRect = lineFragmentRect(for: line, layoutManager: layoutManager) else {
+            return false
+        }
+        let point = NSPoint(
+            x: textView.textContainerOrigin.x + lineRect.minX + 2,
+            y: textView.textContainerOrigin.y + lineRect.midY
+        )
+        let pointInContainer = convert(point, from: textView)
+        guard bounds.contains(pointInContainer),
+              hitTest(pointInContainer) === textView
+        else {
+            return false
+        }
+
+        let insertionLocation = textView.characterIndexForInsertion(at: point)
+        return insertionLocation >= line.contentRange.location
+            && insertionLocation <= NSMaxRange(line.contentRange)
+    }
+
+    func dragSelectWithMouseEventsForTesting(
+        fromLine: Int,
+        utf16Offset: Int,
+        toLine: Int,
+        utf16EndOffset: Int
+    ) -> Bool {
+        guard let startPoint = textPointForMouseEventTesting(
+            lineIndex: fromLine,
+            utf16Offset: utf16Offset
+        ),
+        let endPoint = textPointForMouseEventTesting(
+            lineIndex: toLine,
+            utf16Offset: utf16EndOffset
+        ),
+        let window else {
+            return false
+        }
+
+        let startInWindow = textView.convert(startPoint, to: nil)
+        let endInWindow = textView.convert(endPoint, to: nil)
+        let timestamp = ProcessInfo.processInfo.systemUptime
+        guard let mouseDown = NSEvent.mouseEvent(
+            with: .leftMouseDown,
+            location: startInWindow,
+            modifierFlags: [],
+            timestamp: timestamp,
+            windowNumber: window.windowNumber,
+            context: nil,
+            eventNumber: 2,
+            clickCount: 1,
+            pressure: 1
+        ),
+        let mouseDragged = NSEvent.mouseEvent(
+            with: .leftMouseDragged,
+            location: endInWindow,
+            modifierFlags: [],
+            timestamp: timestamp + 0.01,
+            windowNumber: window.windowNumber,
+            context: nil,
+            eventNumber: 3,
+            clickCount: 1,
+            pressure: 1
+        ),
+        let mouseUp = NSEvent.mouseEvent(
+            with: .leftMouseUp,
+            location: endInWindow,
+            modifierFlags: [],
+            timestamp: timestamp + 0.02,
+            windowNumber: window.windowNumber,
+            context: nil,
+            eventNumber: 4,
+            clickCount: 1,
+            pressure: 0
+        ) else {
+            return false
+        }
+
+        let originalCursorLocation = CGEvent(source: nil)?.location
+        window.setFrameOrigin(NSPoint(x: 20, y: 20))
+        window.orderFront(nil)
+        window.makeKey()
+        window.makeFirstResponder(textView)
+        warpCursorForMouseEventTesting(to: startInWindow, in: window)
+        defer {
+            if let originalCursorLocation {
+                CGWarpMouseCursorPosition(originalCursorLocation)
+            }
+        }
+        NSApp.postEvent(mouseUp, atStart: true)
+        NSApp.postEvent(mouseDragged, atStart: true)
+        window.sendEvent(mouseDown)
+        return textView.selectedRange().length > 0
+    }
+
+    private func warpCursorForMouseEventTesting(to windowPoint: NSPoint, in window: NSWindow) {
+        guard let primaryScreen = NSScreen.screens.first else {
+            return
+        }
+        let screenPoint = window.convertPoint(toScreen: windowPoint)
+        CGWarpMouseCursorPosition(
+            CGPoint(
+                x: screenPoint.x,
+                y: primaryScreen.frame.maxY - screenPoint.y
+            )
+        )
+    }
+
+    private func textPointForMouseEventTesting(
+        lineIndex: Int,
+        utf16Offset: Int
+    ) -> NSPoint? {
+        let infos = lineInfos()
+        guard infos.indices.contains(lineIndex),
+              let layoutManager = textView.layoutManager,
+              let textContainer = textView.textContainer
+        else {
+            return nil
+        }
+
+        let line = infos[lineIndex]
+        let offset = max(0, min(utf16Offset, line.contentRange.length))
+        let location = line.contentRange.location + offset
+        textView.scrollRangeToVisible(NSRange(location: location, length: 0))
+        layoutSubtreeIfNeeded()
+        layoutManager.ensureLayout(for: textContainer)
+
+        guard let lineRect = lineFragmentRect(for: line, layoutManager: layoutManager) else {
+            return nil
+        }
+
+        let x: CGFloat
+        if location < NSMaxRange(line.contentRange) {
+            let glyphRange = layoutManager.glyphRange(
+                forCharacterRange: NSRange(location: location, length: 1),
+                actualCharacterRange: nil
+            )
+            x = glyphRange.length > 0
+                ? layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer).minX + 1
+                : lineRect.minX + 1
+        } else if line.contentRange.length > 0 {
+            let glyphRange = layoutManager.glyphRange(
+                forCharacterRange: NSRange(location: location - 1, length: 1),
+                actualCharacterRange: nil
+            )
+            x = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer).maxX + 1
+        } else {
+            x = lineRect.minX + 1
+        }
+
+        return NSPoint(
+            x: textView.textContainerOrigin.x + x,
+            y: textView.textContainerOrigin.y + lineRect.midY
+        )
+    }
+
+    var textDocumentGeometryForTesting: (frame: NSRect, usedRect: NSRect) {
+        layoutSubtreeIfNeeded()
+        if let layoutManager = textView.layoutManager,
+           let textContainer = textView.textContainer {
+            layoutManager.ensureLayout(for: textContainer)
+            return (textView.frame, layoutManager.usedRect(for: textContainer))
+        }
+        return (textView.frame, .zero)
     }
 
     func selectionDisplayRefreshIsDeferredDuringMouseTrackingForTesting() -> Bool {
@@ -3730,13 +4287,25 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         var segments: [SearchRangeSegment] = []
         var displayLineIndex = 0
         var activeTaskIndentColumns: Int?
-        var isInsideCodeBlock = false
+        var activeCodeFence: MarkdownCodeFence?
+        var codeBlockHasSourceLine = false
 
         for sourceLine in sourceLines {
             let line = sourceLine.text
 
-            if Self.parseCodeFenceLine(line) != nil {
-                isInsideCodeBlock.toggle()
+            if let openingFence = activeCodeFence {
+                if Self.isClosingCodeFenceLine(line, for: openingFence) {
+                    if !codeBlockHasSourceLine {
+                        displayLineIndex += 1
+                    }
+                    activeCodeFence = nil
+                    codeBlockHasSourceLine = false
+                    continue
+                }
+                codeBlockHasSourceLine = true
+            } else if let fence = Self.parseOpeningCodeFence(line) {
+                activeCodeFence = fence
+                codeBlockHasSourceLine = false
                 continue
             }
 
@@ -3748,7 +4317,7 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             let sourceLength = (line as NSString).length
             let sourcePrefixLength: Int
 
-            if isInsideCodeBlock {
+            if activeCodeFence != nil {
                 sourcePrefixLength = 0
                 activeTaskIndentColumns = nil
             } else if Self.isHorizontalRuleLine(line) {
@@ -4196,20 +4765,39 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
                 continue
             }
 
-            let blockY = textContainerOrigin.y + firstRect.minY - visibleBounds.origin.y - 5
-            let blockBottom = textContainerOrigin.y + lastRect.maxY - visibleBounds.origin.y + 5
+            let blockY = textContainerOrigin.y
+                + firstRect.minY
+                + CodeBlockLayout.externalMargin
+                - visibleBounds.origin.y
+            let blockBottom = textContainerOrigin.y
+                + lastRect.maxY
+                - CodeBlockLayout.externalMargin
+                - visibleBounds.origin.y
             guard blockBottom > -24, blockY < bounds.height + 24 else {
                 continue
             }
 
             markerItems.append(
                 LineMarkerOverlayItem(
-                    kind: .codeBlock(language: block.language),
+                    kind: .codeBlock(
+                        language: block.language,
+                        displayName: block.language?.uppercased()
+                            ?? language.localized("Plain text"),
+                        lineRange: block.lineRange
+                    ),
                     frame: NSRect(
-                        x: max(0, textContainerOrigin.x - visibleBounds.origin.x + 1),
+                        x: max(
+                            0,
+                            textContainerOrigin.x
+                                - visibleBounds.origin.x
+                                + CodeBlockLayout.horizontalInset
+                        ),
                         y: blockY,
                         width: max(80, textView.bounds.width - textView.textContainerInset.width * 2 - 2),
-                        height: max(lineHeight() + 10, blockBottom - blockY)
+                        height: max(
+                            lineHeight() + CodeBlockLayout.verticalPadding * 2,
+                            blockBottom - blockY
+                        )
                     )
                 )
             )
@@ -4721,8 +5309,19 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         if case .tableRow(_, let columnCount) = kind {
             applyTableTabStops(to: style, columnCount: columnCount)
         }
-        let minimumLineHeight = kind.isCodeBlock ? lineHeight() + 2 : lineHeight()
+        let minimumLineHeight = kind.isCodeBlock
+            ? lineHeight() + CodeBlockLayout.contentLineSpacing
+            : lineHeight()
         style.minimumLineHeight = max(minimumLineHeight, imagePreviewLineHeight(for: line))
+        if kind.isCodeBlock {
+            let boundary = codeBlockBoundary(at: line.index)
+            style.paragraphSpacingBefore = boundary.isFirst
+                ? CodeBlockLayout.verticalPadding + CodeBlockLayout.externalMargin
+                : 0
+            style.paragraphSpacing = boundary.isLast
+                ? CodeBlockLayout.verticalPadding + CodeBlockLayout.externalMargin * 2
+                : 0
+        }
         style.lineBreakMode = .byWordWrapping
         return style
     }
@@ -4741,9 +5340,24 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         if case .tableRow(_, let columnCount) = kind {
             applyTableTabStops(to: style, columnCount: columnCount)
         }
-        style.minimumLineHeight = kind.isCodeBlock ? lineHeight() + 2 : lineHeight()
+        style.minimumLineHeight = kind.isCodeBlock
+            ? lineHeight() + CodeBlockLayout.contentLineSpacing
+            : lineHeight()
         style.lineBreakMode = .byWordWrapping
         return style
+    }
+
+    private func codeBlockBoundary(at lineIndex: Int) -> (isFirst: Bool, isLast: Bool) {
+        guard lineKinds.indices.contains(lineIndex),
+              lineKinds[lineIndex].isCodeBlock
+        else {
+            return (false, false)
+        }
+
+        let currentKind = lineKinds[lineIndex]
+        let isFirst = lineIndex == 0 || lineKinds[lineIndex - 1] != currentKind
+        let isLast = lineIndex == lineKinds.count - 1 || lineKinds[lineIndex + 1] != currentKind
+        return (isFirst, isLast)
     }
 
     private func applyListParagraphIndents(
@@ -5255,12 +5869,28 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             )
 
             if glyphRange.length > 0 {
-                return layoutManager.lineFragmentRect(
-                    forGlyphAt: glyphRange.location,
-                    effectiveRange: nil,
-                    withoutAdditionalLayout: true
-                )
+                var bounds = NSRect.null
+                layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) {
+                    lineFragmentRect,
+                    _,
+                    _,
+                    _,
+                    _ in
+                    bounds = bounds.union(lineFragmentRect)
+                }
+                if !bounds.isNull {
+                    return bounds
+                }
             }
+        }
+
+        let textLength = (textView.string as NSString).length
+        if line.contentRange.location == textLength,
+           layoutManager.extraLineFragmentTextContainer != nil {
+            var rect = layoutManager.extraLineFragmentRect
+            rect.size.height = max(rect.height, lineHeight())
+            rect.size.width = max(rect.width, textView.bounds.width)
+            return rect
         }
 
         if line.contentRange.location > 0 {
@@ -5377,23 +6007,38 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         var displayLines: [String] = []
         var lineKinds: [LineKind] = []
         var activeTaskIndentColumns: Int?
-        var isInsideCodeBlock = false
+        var activeCodeFence: MarkdownCodeFence?
         var activeCodeLanguage: String?
+        var codeBlockDisplayStartIndex: Int?
 
         var index = 0
         while index < lines.count {
             let line = lines[index]
 
-            if let language = parseCodeFenceLine(line) {
-                isInsideCodeBlock.toggle()
-                activeCodeLanguage = isInsideCodeBlock ? language : nil
+            if let openingFence = activeCodeFence {
+                if isClosingCodeFenceLine(line, for: openingFence) {
+                    if codeBlockDisplayStartIndex == displayLines.count {
+                        displayLines.append("")
+                        lineKinds.append(.codeBlock(language: activeCodeLanguage))
+                    }
+                    activeCodeFence = nil
+                    activeCodeLanguage = nil
+                    codeBlockDisplayStartIndex = nil
+                    index += 1
+                    continue
+                }
+
+                displayLines.append(line)
+                lineKinds.append(.codeBlock(language: activeCodeLanguage))
+                activeTaskIndentColumns = nil
                 index += 1
                 continue
             }
 
-            if isInsideCodeBlock {
-                displayLines.append(line)
-                lineKinds.append(.codeBlock(language: activeCodeLanguage))
+            if let fence = parseOpeningCodeFence(line) {
+                activeCodeFence = fence
+                activeCodeLanguage = fence.language
+                codeBlockDisplayStartIndex = displayLines.count
                 activeTaskIndentColumns = nil
                 index += 1
                 continue
@@ -5468,6 +6113,12 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             index += 1
         }
 
+        if activeCodeFence != nil,
+           codeBlockDisplayStartIndex == displayLines.count {
+            displayLines.append("")
+            lineKinds.append(.codeBlock(language: activeCodeLanguage))
+        }
+
         if displayLines.isEmpty {
             displayLines = [""]
             lineKinds = [.normal]
@@ -5533,22 +6184,48 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         return nsLine.substring(with: match.range(at: 1))
     }
 
-    private static func parseCodeFenceLine(_ line: String) -> String?? {
+    private static func parseOpeningCodeFence(_ line: String) -> MarkdownCodeFence? {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
-        guard trimmed.hasPrefix("```") else {
+        guard let marker = trimmed.first,
+              marker == "`" || marker == "~"
+        else {
             return nil
         }
 
-        let language = String(trimmed.dropFirst(3)).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !language.contains("`") else {
+        let markerLength = trimmed.prefix { $0 == marker }.count
+        guard markerLength >= 3 else {
             return nil
         }
 
-        if language.isEmpty {
-            return .some(nil)
+        let info = String(trimmed.dropFirst(markerLength))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard marker != "`" || !info.contains("`") else {
+            return nil
         }
 
-        return .some(language.lowercased())
+        return MarkdownCodeFence(
+            marker: marker,
+            length: markerLength,
+            language: info.isEmpty ? nil : info.lowercased()
+        )
+    }
+
+    private static func isClosingCodeFenceLine(
+        _ line: String,
+        for openingFence: MarkdownCodeFence
+    ) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard trimmed.count >= openingFence.length else {
+            return false
+        }
+        return trimmed.allSatisfy { $0 == openingFence.marker }
+    }
+
+    private static func isBareCodeFenceLine(_ line: String) -> Bool {
+        guard let fence = parseOpeningCodeFence(line) else {
+            return false
+        }
+        return fence.language == nil
     }
 
     private static func isHorizontalRuleLine(_ line: String) -> Bool {
@@ -5715,6 +6392,13 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
 
     private static func containsTaskMarkdown(in text: String) -> Bool {
         text.components(separatedBy: "\n").contains { parseTaskLine($0) != nil }
+    }
+
+    private static func containsStructuredMarkdown(in text: String) -> Bool {
+        containsTaskMarkdown(in: text)
+            || text.components(separatedBy: "\n").contains {
+                parseOpeningCodeFence($0) != nil
+            }
     }
 
     private static func indentColumns(in indentation: String) -> Int {
@@ -6213,6 +6897,84 @@ private final class SlashCommandLabel: NSTextField {
     }
 }
 
+struct EditorContextMenuAction {
+    let title: String
+    let action: Selector
+    let keyEquivalent: String
+    let modifierMask: NSEvent.ModifierFlags
+
+    init(
+        title: String,
+        action: Selector,
+        keyEquivalent: String = "",
+        modifierMask: NSEvent.ModifierFlags = []
+    ) {
+        self.title = title
+        self.action = action
+        self.keyEquivalent = keyEquivalent
+        self.modifierMask = modifierMask
+    }
+}
+
+enum EditorContextMenuBuilder {
+    static func addingPinadayActions(
+        to nativeMenu: NSMenu,
+        target: AnyObject,
+        actions: [EditorContextMenuAction]
+    ) -> NSMenu {
+        let actionsToAdd = actions.filter { action in
+            !nativeMenu.items.contains(where: { $0.action == action.action })
+        }
+        guard !actionsToAdd.isEmpty else {
+            return nativeMenu
+        }
+
+        var insertionIndex: Int
+        if let pasteIndex = nativeMenu.items.lastIndex(where: isPasteItem) {
+            insertionIndex = pasteIndex + 1
+            if insertionIndex < nativeMenu.items.count,
+               nativeMenu.items[insertionIndex].isSeparatorItem {
+                insertionIndex += 1
+            } else {
+                nativeMenu.insertItem(.separator(), at: insertionIndex)
+                insertionIndex += 1
+            }
+        } else {
+            insertionIndex = nativeMenu.items.count
+            if nativeMenu.items.last?.isSeparatorItem == false {
+                nativeMenu.addItem(.separator())
+                insertionIndex += 1
+            }
+        }
+
+        for action in actionsToAdd {
+            let item = NSMenuItem(
+                title: action.title,
+                action: action.action,
+                keyEquivalent: action.keyEquivalent
+            )
+            item.keyEquivalentModifierMask = action.modifierMask
+            item.target = target
+            nativeMenu.insertItem(item, at: insertionIndex)
+            insertionIndex += 1
+        }
+
+        if insertionIndex < nativeMenu.items.count,
+           !nativeMenu.items[insertionIndex].isSeparatorItem {
+            nativeMenu.insertItem(.separator(), at: insertionIndex)
+        }
+
+        return nativeMenu
+    }
+
+    private static func isPasteItem(_ item: NSMenuItem) -> Bool {
+        let action = item.action
+        return action == #selector(NSText.paste(_:))
+            || action == #selector(NSTextView.pasteAsPlainText(_:))
+            || action == #selector(NSTextView.pasteAsRichText(_:))
+    }
+}
+
 private final class TodoTextView: NSTextView {
     var copyHandler: (() -> Bool)?
     var canCopyHandler: (() -> Bool)?
@@ -6220,6 +6982,13 @@ private final class TodoTextView: NSTextView {
     var cutHandler: (() -> Bool)?
     var pasteHandler: (() -> Bool)?
     var canPasteHandler: (() -> Bool)?
+    var findInNoteHandler: (() -> Void)?
+    var goToNoteHandler: (() -> Void)?
+    var backToTodayHandler: (() -> Void)?
+    var findInNoteTitle = "Find in Note"
+    var goToNoteTitle = "Go to Note"
+    var backToTodayTitle = "Back to today"
+    var isShowingToday = true
     var selectionDragDidEndHandler: (() -> Void)?
     var checkboxCursorProvider: ((NSPoint) -> NSCursor?)?
     var imageCursorProvider: ((NSPoint) -> NSCursor?)?
@@ -6282,6 +7051,16 @@ private final class TodoTextView: NSTextView {
     }
 
     override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        if item.action == #selector(findInNoteFromContextMenu(_:)) {
+            return findInNoteHandler != nil
+        }
+        if item.action == #selector(goToNoteFromContextMenu(_:)) {
+            return goToNoteHandler != nil
+        }
+        if item.action == #selector(backToTodayFromContextMenu(_:)) {
+            return backToTodayHandler != nil && !isShowingToday
+        }
+
         if item.action == #selector(copy(_:)),
            canCopyHandler?() == true {
             return true
@@ -6293,6 +7072,51 @@ private final class TodoTextView: NSTextView {
         }
 
         return super.validateUserInterfaceItem(item)
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        guard let nativeMenu = super.menu(for: event) else {
+            return nil
+        }
+
+        var actions = [
+            EditorContextMenuAction(
+                title: findInNoteTitle,
+                action: #selector(findInNoteFromContextMenu(_:)),
+                keyEquivalent: "f",
+                modifierMask: [.command]
+            ),
+            EditorContextMenuAction(
+                title: goToNoteTitle,
+                action: #selector(goToNoteFromContextMenu(_:)),
+                keyEquivalent: "p",
+                modifierMask: [.command]
+            )
+        ]
+        if !isShowingToday {
+            actions.append(EditorContextMenuAction(
+                title: backToTodayTitle,
+                action: #selector(backToTodayFromContextMenu(_:))
+            ))
+        }
+
+        return EditorContextMenuBuilder.addingPinadayActions(
+            to: nativeMenu,
+            target: self,
+            actions: actions
+        )
+    }
+
+    @objc private func findInNoteFromContextMenu(_ sender: Any?) {
+        findInNoteHandler?()
+    }
+
+    @objc private func goToNoteFromContextMenu(_ sender: Any?) {
+        goToNoteHandler?()
+    }
+
+    @objc private func backToTodayFromContextMenu(_ sender: Any?) {
+        backToTodayHandler?()
     }
 
     override func keyDown(with event: NSEvent) {
@@ -6407,7 +7231,11 @@ private struct LineMarkerOverlayItem {
     enum Kind {
         case bullet(level: Int)
         case quote
-        case codeBlock(language: String?)
+        case codeBlock(
+            language: String?,
+            displayName: String,
+            lineRange: Range<Int>
+        )
         case horizontalRule
         case tableRow(
             isHeader: Bool,
@@ -6419,6 +7247,36 @@ private struct LineMarkerOverlayItem {
 
     var kind: Kind
     var frame: NSRect
+
+    var codeLanguageTarget: CodeLanguageOverlayTarget? {
+        guard case .codeBlock(let language, let displayName, let lineRange) = kind else {
+            return nil
+        }
+
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedSystemFont(ofSize: 9.5, weight: .semibold)
+        ]
+        let size = (displayName as NSString).size(withAttributes: attributes)
+        return CodeLanguageOverlayTarget(
+            frame: NSRect(
+                x: frame.maxX
+                    - size.width
+                    - CodeBlockLayout.languageChipHorizontalPadding * 2
+                    - CodeBlockLayout.languageChipTrailingPadding,
+                y: frame.minY + CodeBlockLayout.verticalPadding,
+                width: size.width + CodeBlockLayout.languageChipHorizontalPadding * 2,
+                height: CodeBlockLayout.languageChipHeight
+            ),
+            lineRange: lineRange,
+            language: language
+        )
+    }
+}
+
+private struct CodeLanguageOverlayTarget {
+    var frame: NSRect
+    var lineRange: Range<Int>
+    var language: String?
 }
 
 private struct TableSearchHighlight: Equatable {
@@ -6553,6 +7411,10 @@ private final class MarkdownImageInteractionOverlayView: NSView {
     var onSelectImage: ((MarkdownImageOverlayItem, NSEvent) -> Void)?
     var onResizeImage: ((MarkdownImageOverlayItem, NSEvent) -> Void)?
     var onCopyImage: ((MarkdownImageOverlayItem) -> Bool)?
+    var onFindInNote: (() -> Void)?
+    var onGoToNote: (() -> Void)?
+    var onBackToToday: (() -> Void)?
+    var isShowingToday = true
 
     private let analyzer = ImageAnalyzer()
     private var analysisCache: [String: ImageAnalysis] = [:]
@@ -6724,6 +7586,32 @@ private final class MarkdownImageInteractionOverlayView: NSView {
         copyItem.keyEquivalentModifierMask = [.command]
         copyItem.target = self
         menu.addItem(copyItem)
+        menu.addItem(.separator())
+        let findItem = NSMenuItem(
+            title: language.localized("Find in Note"),
+            action: #selector(findInNoteFromContextMenu(_:)),
+            keyEquivalent: "f"
+        )
+        findItem.keyEquivalentModifierMask = [.command]
+        findItem.target = self
+        menu.addItem(findItem)
+        let goToItem = NSMenuItem(
+            title: language.localized("Go to Note"),
+            action: #selector(goToNoteFromContextMenu(_:)),
+            keyEquivalent: "p"
+        )
+        goToItem.keyEquivalentModifierMask = [.command]
+        goToItem.target = self
+        menu.addItem(goToItem)
+        if !isShowingToday {
+            let backToTodayItem = NSMenuItem(
+                title: language.localized("Back to today"),
+                action: #selector(backToTodayFromContextMenu(_:)),
+                keyEquivalent: ""
+            )
+            backToTodayItem.target = self
+            menu.addItem(backToTodayItem)
+        }
         return menu
     }
 
@@ -6734,6 +7622,21 @@ private final class MarkdownImageInteractionOverlayView: NSView {
 
         _ = onCopyImage?(contextMenuItem)
         self.contextMenuItem = nil
+    }
+
+    @objc private func findInNoteFromContextMenu(_ sender: Any?) {
+        onFindInNote?()
+        contextMenuItem = nil
+    }
+
+    @objc private func goToNoteFromContextMenu(_ sender: Any?) {
+        onGoToNote?()
+        contextMenuItem = nil
+    }
+
+    @objc private func backToTodayFromContextMenu(_ sender: Any?) {
+        onBackToToday?()
+        contextMenuItem = nil
     }
 
     private func trackTextSelection(
@@ -7698,6 +8601,7 @@ private final class LiveTextImageView: NSView, ImageAnalysisOverlayViewDelegate,
 
 private final class TodoCheckboxOverlayView: NSView {
     var onToggleCheckbox: ((Int) -> Void)?
+    var onChooseCodeLanguage: ((Range<Int>, String?, NSRect) -> Void)?
 
     var palette: AppTheme.Palette = AppTheme.yellow {
         didSet {
@@ -7706,6 +8610,28 @@ private final class TodoCheckboxOverlayView: NSView {
     }
     private var items: [TodoCheckboxOverlayItem] = []
     private var markers: [LineMarkerOverlayItem] = []
+
+#if DEBUG
+    var codeBlockFramesForTesting: [NSRect] {
+        markers.compactMap { marker in
+            if case .codeBlock = marker.kind {
+                return marker.frame
+            }
+            return nil
+        }
+    }
+
+    var codeLanguageTargetCenterForTesting: NSPoint? {
+        guard let target = markers.compactMap(\.codeLanguageTarget).first else {
+            return nil
+        }
+        return NSPoint(x: target.frame.midX, y: target.frame.midY)
+    }
+
+    func codeLanguageCursorForTesting(at point: NSPoint) -> NSCursor? {
+        codeLanguageTarget(at: point) == nil ? nil : .pointingHand
+    }
+#endif
 
     override var isFlipped: Bool {
         true
@@ -7720,7 +8646,9 @@ private final class TodoCheckboxOverlayView: NSView {
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         let localPoint = convert(point, from: superview)
-        return lineIndex(at: localPoint) == nil ? nil : self
+        return lineIndex(at: localPoint) == nil && codeLanguageTarget(at: localPoint) == nil
+            ? nil
+            : self
     }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
@@ -7729,13 +8657,24 @@ private final class TodoCheckboxOverlayView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
-        _ = performClick(at: point)
+        if performClick(at: point) {
+            return
+        }
+
+        if let target = codeLanguageTarget(at: point) {
+            onChooseCodeLanguage?(target.lineRange, target.language, target.frame)
+        }
     }
 
     override func resetCursorRects() {
         super.resetCursorRects()
         for item in items {
             addCursorRect(clickTarget(for: item), cursor: .pointingHand)
+        }
+        for marker in markers where marker.codeLanguageTarget != nil {
+            if let target = marker.codeLanguageTarget {
+                addCursorRect(target.frame, cursor: .pointingHand)
+            }
         }
     }
 
@@ -7786,6 +8725,12 @@ private final class TodoCheckboxOverlayView: NSView {
         item.frame.insetBy(dx: -2, dy: -2)
     }
 
+    private func codeLanguageTarget(at point: NSPoint) -> CodeLanguageOverlayTarget? {
+        markers.reversed().compactMap(\.codeLanguageTarget).first {
+            $0.frame.contains(point)
+        }
+    }
+
     private func drawCheckbox(_ item: TodoCheckboxOverlayItem) {
         let boxSize: CGFloat = 16
         let boxRect = NSRect(
@@ -7828,7 +8773,7 @@ private final class TodoCheckboxOverlayView: NSView {
             palette.accentNS.withAlphaComponent(0.45).setFill()
             NSBezierPath(roundedRect: bar, xRadius: 1.5, yRadius: 1.5).fill()
 
-        case .codeBlock(let language):
+        case .codeBlock(_, let displayName, _):
             let blockRect = item.frame.integral.insetBy(dx: 0.5, dy: 0.5)
             let blockPath = NSBezierPath(roundedRect: blockRect, xRadius: 6, yRadius: 6)
             palette.codeBackgroundNS.withAlphaComponent(palette.kind == .dark ? 0.34 : 0.24).setFill()
@@ -7847,26 +8792,17 @@ private final class TodoCheckboxOverlayView: NSView {
             palette.accentNS.withAlphaComponent(0.65).setFill()
             NSBezierPath(roundedRect: railRect, xRadius: 1.5, yRadius: 1.5).fill()
 
-            if let language, !language.isEmpty {
-                let label = language.uppercased()
-                let attributes: [NSAttributedString.Key: Any] = [
-                    .font: NSFont.monospacedSystemFont(ofSize: 9.5, weight: .semibold),
-                    .foregroundColor: palette.secondaryTextNS.withAlphaComponent(0.9)
-                ]
-                let size = (label as NSString).size(withAttributes: attributes)
-                let chipRect = NSRect(
-                    x: blockRect.maxX - size.width - 18,
-                    y: blockRect.minY + 5,
-                    width: size.width + 12,
-                    height: 16
-                )
-                palette.checkboxUncheckedNS.withAlphaComponent(palette.kind == .dark ? 0.18 : 0.5).setFill()
-                NSBezierPath(roundedRect: chipRect, xRadius: 4, yRadius: 4).fill()
-                (label as NSString).draw(
-                    at: NSPoint(x: chipRect.minX + 6, y: chipRect.minY + 2.5),
-                    withAttributes: attributes
-                )
-            }
+            let attributes = codeLanguageLabelAttributes
+            let chipRect = codeLanguageChipRect(label: displayName, blockFrame: item.frame)
+            palette.checkboxUncheckedNS.withAlphaComponent(palette.kind == .dark ? 0.3 : 0.65).setFill()
+            NSBezierPath(roundedRect: chipRect, xRadius: 4, yRadius: 4).fill()
+            (displayName as NSString).draw(
+                at: NSPoint(
+                    x: chipRect.minX + CodeBlockLayout.languageChipHorizontalPadding,
+                    y: chipRect.minY + 2.5
+                ),
+                withAttributes: attributes
+            )
 
         case .horizontalRule:
             let line = NSRect(
@@ -7937,6 +8873,26 @@ private final class TodoCheckboxOverlayView: NSView {
                 )
             }
         }
+    }
+
+    private var codeLanguageLabelAttributes: [NSAttributedString.Key: Any] {
+        [
+            .font: NSFont.monospacedSystemFont(ofSize: 9.5, weight: .semibold),
+            .foregroundColor: palette.secondaryTextNS.withAlphaComponent(0.95)
+        ]
+    }
+
+    private func codeLanguageChipRect(label: String, blockFrame: NSRect) -> NSRect {
+        let size = (label as NSString).size(withAttributes: codeLanguageLabelAttributes)
+        return NSRect(
+            x: blockFrame.maxX
+                - size.width
+                - CodeBlockLayout.languageChipHorizontalPadding * 2
+                - CodeBlockLayout.languageChipTrailingPadding,
+            y: blockFrame.minY + CodeBlockLayout.verticalPadding,
+            width: size.width + CodeBlockLayout.languageChipHorizontalPadding * 2,
+            height: CodeBlockLayout.languageChipHeight
+        )
     }
 
     private func drawBullet(level: Int, in rect: NSRect) {
