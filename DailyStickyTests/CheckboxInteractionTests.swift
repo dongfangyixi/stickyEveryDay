@@ -4,6 +4,499 @@ import XCTest
 
 @MainActor
 final class CheckboxInteractionTests: XCTestCase {
+    func testSlashNumberedListSplitsCodeBlockWithoutBreakingLowerMouseHits() throws {
+        let (editor, _, _, lowerCodeLineIndex) = try makeScrolledSplitCodeBlockEditor()
+        XCTAssertTrue(
+            editor.isSlashCommandPaletteHiddenForTesting,
+            "Applying the slash command must remove its menu from hit testing"
+        )
+        XCTAssertTrue(
+            editor.clickLineWithWindowEventForTesting(
+                lineIndex: lowerCodeLineIndex,
+                utf16Offset: 2
+            ),
+            "A real mouse event must reach the visible lower code block after the split. "
+                + editor.lineGeometryDescriptionForTesting(lineIndex: lowerCodeLineIndex)
+                + " "
+                + editor.interactionGeometryDescriptionForTesting(lineIndex: lowerCodeLineIndex)
+        )
+    }
+
+    func testSlashNumberedListSplitKeepsNumberedLineMouseReachable() throws {
+        let (editor, _, splitLineIndex, _) = try makeScrolledSplitCodeBlockEditor()
+        XCTAssertTrue(
+            editor.clickLineWithWindowEventForTesting(
+                lineIndex: splitLineIndex,
+                utf16Offset: 0
+            ),
+            "A real mouse event must reach the numbered line created by the split. "
+                + editor.lineGeometryDescriptionForTesting(lineIndex: splitLineIndex)
+                + " "
+                + editor.interactionGeometryDescriptionForTesting(lineIndex: splitLineIndex)
+        )
+        editor.typeTextForTesting("item")
+        XCTAssertEqual(
+            editor.presentationTextForTesting.components(separatedBy: "\n")[splitLineIndex],
+            "1. item",
+            "Typing after the click must edit the numbered line, not the previous focus"
+        )
+    }
+
+    func testAug25MixedStructuredNoteKeepsNumberedAndFinalCodeLinesMouseReachable() throws {
+        let (editor, window) = makeEditor()
+        window.setContentSize(NSSize(width: 620, height: 1_500))
+        editor.setText(
+            """
+            ```python
+            import tensorflow as tf
+            def add(a, b):
+                return a + b
+
+            ```
+
+
+
+
+
+
+            ```
+            dsdf
+
+            ```
+            sdfsdf
+            dsfsdfsdfsdf
+            ```
+
+            ```
+            dfsaddfsf
+            ```
+            sdf
+            dsf
+            abc
+            ```
+            - [ ] sdklfjkl
+            ```
+            sdfsdf
+            sdf
+            ```
+            1.\u{20}
+            ```
+            dsfs
+            /
+            sdf
+            sdf
+            /
+            ```
+            """
+        )
+        window.contentView?.layoutSubtreeIfNeeded()
+        editor.layoutSubtreeIfNeeded()
+
+        let lines = editor.presentationTextForTesting.components(separatedBy: "\n")
+        let numberedLine = try XCTUnwrap(lines.firstIndex(where: { $0.hasPrefix("1. ") }))
+        let finalCodeLine = try XCTUnwrap(editor.codeBlockLineIndicesForTesting.last)
+
+        XCTAssertTrue(
+            editor.mouseCanPlaceCaretWithoutScrollingForTesting(
+                lineIndex: numberedLine,
+                utf16Offset: 0
+            ),
+            "The empty numbered item must accept a direct click"
+        )
+        XCTAssertTrue(
+            editor.mouseCanPlaceCaretWithoutScrollingForTesting(
+                lineIndex: finalCodeLine,
+                utf16Offset: 0
+            ),
+            "The final code line must accept a direct click"
+        )
+    }
+
+    func testProgrammaticStructuredExpansionKeepsLowerLinesMouseReachable() {
+        let (editor, window) = makeEditor()
+        window.setContentSize(NSSize(width: 220, height: 800))
+        editor.layoutSubtreeIfNeeded()
+        editor.setText("short note")
+        window.contentView?.layoutSubtreeIfNeeded()
+        editor.layoutSubtreeIfNeeded()
+
+        editor.setText(
+            """
+            ```python
+            import tensorflow as tf
+            def add(a, b):
+                return a + b
+            ```
+
+
+
+
+
+
+            ```
+            first block
+            ```
+            normal one
+            normal two
+            ```
+            second block
+            line two
+            ```
+            - [ ] task
+            ```
+            third block
+            line two
+            ```
+            1.\u{20}
+            ```
+            final block
+            /
+            final line
+            ```
+            """
+        )
+        window.contentView?.layoutSubtreeIfNeeded()
+        editor.layoutSubtreeIfNeeded()
+
+        let geometry = editor.textDocumentGeometryForTesting
+        XCTAssertGreaterThanOrEqual(
+            geometry.frame.height,
+            geometry.usedRect.maxY,
+            "Programmatic updates must resize the interactive NSTextView document"
+        )
+        for lineIndex in editor.codeBlockLineIndicesForTesting.suffix(4) {
+            XCTAssertTrue(
+                editor.mouseCanPlaceCaretWithoutScrollingForTesting(
+                    lineIndex: lineIndex,
+                    utf16Offset: 0
+                ),
+                "Lower code line \(lineIndex) must accept a direct click after programmatic expansion"
+            )
+        }
+    }
+
+    func testMiddleListPromotionKeepsEveryLowerLineMouseReachable() throws {
+        let (editor, window) = makeEditor()
+        window.setContentSize(NSSize(width: 220, height: 900))
+        editor.setText(
+            """
+            ```python
+            import tensorflow as tf
+            def add(a, b):
+                return a + b
+            ```
+
+            ```
+            first block
+            ```
+            normal one
+            normal two
+            ```
+            second block
+            line two
+            ```
+            - [ ] task
+            ```
+            third block
+            line two
+            ```
+            insertion anchor
+            ```
+            final block
+            /
+            final line
+            ```
+            """
+        )
+        window.contentView?.layoutSubtreeIfNeeded()
+        editor.layoutSubtreeIfNeeded()
+
+        let originalLines = editor.presentationTextForTesting.components(separatedBy: "\n")
+        let anchorLineIndex = try XCTUnwrap(originalLines.firstIndex(of: "insertion anchor"))
+        XCTAssertTrue(
+            editor.typeTextForTesting(
+                "\n1. ",
+                atLine: anchorLineIndex,
+                utf16Offset: (originalLines[anchorLineIndex] as NSString).length
+            )
+        )
+        window.contentView?.layoutSubtreeIfNeeded()
+        editor.layoutSubtreeIfNeeded()
+
+        let numberedLineIndex = anchorLineIndex + 1
+        let geometry = editor.textDocumentGeometryForTesting
+        XCTAssertGreaterThanOrEqual(
+            geometry.frame.height,
+            geometry.usedRect.maxY,
+            "The interactive NSTextView frame must contain post-edit structured layout"
+        )
+        XCTAssertTrue(
+            editor.mouseCanPlaceCaretWithoutScrollingForTesting(
+                lineIndex: numberedLineIndex,
+                utf16Offset: 0
+            ),
+            "The newly promoted numbered line must accept a mouse click"
+        )
+        for lineIndex in editor.codeBlockLineIndicesForTesting where lineIndex > numberedLineIndex {
+            XCTAssertTrue(
+                editor.mouseCanPlaceCaretWithoutScrollingForTesting(
+                    lineIndex: lineIndex,
+                    utf16Offset: 0
+                ),
+                "Lower code line \(lineIndex) must remain reachable after the middle edit"
+            )
+        }
+    }
+
+    func testTerminalEmptyCodeBlockGeometryDoesNotDependOnCaretLine() throws {
+        let (editor, window) = makeEditor()
+        editor.setText(
+            """
+            first
+            second
+            ```
+
+            ```
+            """
+        )
+        window.contentView?.layoutSubtreeIfNeeded()
+        editor.layoutSubtreeIfNeeded()
+
+        let codeLine = try XCTUnwrap(editor.codeBlockLineIndicesForTesting.last)
+        let codeRange = try XCTUnwrap(editor.contentRangeForTesting(lineIndex: codeLine))
+        editor.selectRangeForTesting(NSRange(location: codeRange.location, length: 0))
+        window.contentView?.layoutSubtreeIfNeeded()
+        editor.layoutSubtreeIfNeeded()
+        let focusedFrame = try XCTUnwrap(editor.codeBlockFramesForTesting().last)
+        let focusedGeometry = editor.lineGeometryDescriptionForTesting(lineIndex: codeLine)
+
+        let precedingRange = try XCTUnwrap(editor.contentRangeForTesting(lineIndex: codeLine - 1))
+        editor.selectRangeForTesting(NSRange(location: precedingRange.location, length: 0))
+        window.contentView?.layoutSubtreeIfNeeded()
+        editor.layoutSubtreeIfNeeded()
+        let unfocusedFrame = try XCTUnwrap(editor.codeBlockFramesForTesting().last)
+        let unfocusedGeometry = editor.lineGeometryDescriptionForTesting(lineIndex: codeLine)
+
+        XCTAssertEqual(
+            unfocusedFrame.minY,
+            focusedFrame.minY,
+            accuracy: 0.5,
+            "Moving the caret outside a terminal empty code block must not move it. "
+                + "focused=\(focusedGeometry), unfocused=\(unfocusedGeometry)"
+        )
+        XCTAssertEqual(
+            unfocusedFrame.height,
+            focusedFrame.height,
+            accuracy: 0.5,
+            "Moving the caret outside a terminal empty code block must not resize it. "
+                + "focused=\(focusedGeometry), unfocused=\(unfocusedGeometry)"
+        )
+    }
+
+    func testEmptyCodeBlockAfterPopulatedBlockAndBlankLinesUsesSingleLineHeight() throws {
+        let (editor, window) = makeEditor()
+        editor.setText(
+            """
+            ```python
+            import tensorflow as tf
+            def add(a, b):
+                return a + b
+
+            ```
+
+
+
+
+
+            ```
+
+            ```
+            """
+        )
+        window.contentView?.layoutSubtreeIfNeeded()
+        editor.layoutSubtreeIfNeeded()
+
+        let initialFrames = editor.codeBlockFramesForTesting()
+        XCTAssertEqual(initialFrames.count, 2)
+        XCTAssertEqual(editor.codeBlockLineIndicesForTesting.count, 5)
+        let emptyCodeLine = try XCTUnwrap(editor.codeBlockLineIndicesForTesting.last)
+        let emptyCodeRange = try XCTUnwrap(editor.contentRangeForTesting(lineIndex: emptyCodeLine))
+        editor.selectRangeForTesting(NSRange(location: emptyCodeRange.location, length: 0))
+        window.contentView?.layoutSubtreeIfNeeded()
+        editor.layoutSubtreeIfNeeded()
+
+        let focusedFrames = editor.codeBlockFramesForTesting()
+        let emptyGeometry = editor.lineGeometryDescriptionForTesting(lineIndex: emptyCodeLine)
+        XCTAssertLessThanOrEqual(
+            try XCTUnwrap(focusedFrames.last).height,
+            40,
+            "A focused one-line empty block must not absorb surrounding blank-line height: initial=\(initialFrames), focused=\(focusedFrames)"
+        )
+        XCTAssertTrue(editor.typeTextForTesting("x", atLine: emptyCodeLine, utf16Offset: 0))
+        window.contentView?.layoutSubtreeIfNeeded()
+        editor.layoutSubtreeIfNeeded()
+
+        let populatedFrames = editor.codeBlockFramesForTesting()
+        let populatedGeometry = editor.lineGeometryDescriptionForTesting(lineIndex: emptyCodeLine)
+        XCTAssertEqual(
+            try XCTUnwrap(populatedFrames.last).minY,
+            try XCTUnwrap(focusedFrames.last).minY,
+            accuracy: 0.5,
+            "The empty block must not move when its first character is typed. empty=\(emptyGeometry), populated=\(populatedGeometry)"
+        )
+        XCTAssertEqual(
+            try XCTUnwrap(populatedFrames.last).height,
+            try XCTUnwrap(focusedFrames.last).height,
+            accuracy: 0.5,
+            "The empty block must not resize when its first character is typed. empty=\(emptyGeometry), populated=\(populatedGeometry)"
+        )
+    }
+
+    func testFirstDocumentLineCodeBlockContainsItsGlyphRow() throws {
+        let (editor, window) = makeEditor()
+        editor.setText(
+            """
+            ```swift
+            let value = 1
+            ```
+            after
+            """
+        )
+        window.contentView?.layoutSubtreeIfNeeded()
+        editor.layoutSubtreeIfNeeded()
+
+        let blockFrame = try XCTUnwrap(editor.codeBlockFramesForTesting().first)
+        let glyphFrame = try XCTUnwrap(editor.glyphFrameForTesting(lineIndex: 0))
+        XCTAssertLessThanOrEqual(
+            blockFrame.minY,
+            glyphFrame.minY - 2,
+            "The first code block border must begin above its text. block=\(blockFrame), glyph=\(glyphFrame)"
+        )
+        XCTAssertGreaterThanOrEqual(
+            blockFrame.maxY,
+            glyphFrame.maxY + 2,
+            "The first code block border must end below its text. block=\(blockFrame), glyph=\(glyphFrame)"
+        )
+    }
+
+    func testCopyingCompleteCodeBlockPreservesFenceAndLanguage() throws {
+        let (editor, _) = makeEditor()
+        editor.setText(
+            """
+            before
+            ```python
+            import abc
+            run abc
+            ```
+            after
+            """
+        )
+
+        let firstCodeRange = try XCTUnwrap(editor.contentRangeForTesting(lineIndex: 1))
+        let secondCodeRange = try XCTUnwrap(editor.contentRangeForTesting(lineIndex: 2))
+        editor.selectRangeForTesting(
+            NSRange(
+                location: firstCodeRange.location,
+                length: NSMaxRange(secondCodeRange) - firstCodeRange.location
+            )
+        )
+
+        XCTAssertEqual(
+            editor.copySelectionForTesting(),
+            """
+            ```python
+            import abc
+            run abc
+            ```
+            """
+        )
+    }
+
+    func testCopyingPartialCodeTextDoesNotAddFences() throws {
+        let (editor, _) = makeEditor()
+        editor.setText(
+            """
+            ```python
+            import abc
+            ```
+            """
+        )
+
+        let codeRange = try XCTUnwrap(editor.contentRangeForTesting(lineIndex: 0))
+        editor.selectRangeForTesting(NSRange(location: codeRange.location, length: 6))
+
+        XCTAssertEqual(editor.copySelectionForTesting(), "import")
+    }
+
+    func testCopyingNormalTextAndACompleteCodeBlockPreservesBoth() throws {
+        let (editor, _) = makeEditor()
+        editor.setText(
+            """
+            ignored
+            before block
+            ```swift
+            let value = 1
+            ```
+            ignored after
+            """
+        )
+
+        let normalRange = try XCTUnwrap(editor.contentRangeForTesting(lineIndex: 1))
+        let codeRange = try XCTUnwrap(editor.contentRangeForTesting(lineIndex: 2))
+        editor.selectRangeForTesting(
+            NSRange(
+                location: normalRange.location,
+                length: NSMaxRange(codeRange) - normalRange.location
+            )
+        )
+
+        XCTAssertEqual(
+            editor.copySelectionForTesting(),
+            """
+            before block
+            ```swift
+            let value = 1
+            ```
+            """
+        )
+    }
+
+    func testCopiedCodeBlockPastesIntoAnotherNoteWithItsLanguage() throws {
+        let (source, _) = makeEditor()
+        source.setText(
+            """
+            ```go
+            fmt.Println("hello")
+            return nil
+            ```
+            """
+        )
+        let firstCodeRange = try XCTUnwrap(source.contentRangeForTesting(lineIndex: 0))
+        let secondCodeRange = try XCTUnwrap(source.contentRangeForTesting(lineIndex: 1))
+        source.selectRangeForTesting(
+            NSRange(
+                location: firstCodeRange.location,
+                length: NSMaxRange(secondCodeRange) - firstCodeRange.location
+            )
+        )
+        XCTAssertNotNil(source.copySelectionForTesting())
+
+        let (destination, _) = makeEditor()
+        destination.setText("")
+        destination.pasteFromGeneralPasteboardForTesting()
+
+        XCTAssertEqual(destination.codeBlockLanguagesForTesting, ["go", "go"])
+        XCTAssertEqual(
+            destination.text,
+            """
+            ```go
+            fmt.Println("hello")
+            return nil
+            ```
+            """
+        )
+    }
+
     func testCodeBlockLayoutIsStableAndDoesNotOverlapNeighboringLines() throws {
         let (editor, window) = makeEditor()
         editor.setText(
@@ -147,6 +640,7 @@ final class CheckboxInteractionTests: XCTestCase {
 
         let emptyFrame = try XCTUnwrap(editor.codeBlockFramesForTesting().first)
         let emptyLineFrame = try XCTUnwrap(editor.lineFrameForTesting(lineIndex: 1))
+        let emptyGeometry = editor.lineGeometryDescriptionForTesting(lineIndex: 1)
 
         XCTAssertTrue(editor.typeTextForTesting("print('hello')", atLine: 1, utf16Offset: 0))
         window.contentView?.layoutSubtreeIfNeeded()
@@ -154,8 +648,9 @@ final class CheckboxInteractionTests: XCTestCase {
 
         let populatedFrame = try XCTUnwrap(editor.codeBlockFramesForTesting().first)
         let populatedLineFrame = try XCTUnwrap(editor.lineFrameForTesting(lineIndex: 1))
-        XCTAssertEqual(populatedFrame.minY, emptyFrame.minY, accuracy: 0.5)
-        XCTAssertEqual(populatedFrame.maxY, emptyFrame.maxY, accuracy: 0.5)
+        let populatedGeometry = editor.lineGeometryDescriptionForTesting(lineIndex: 1)
+        XCTAssertEqual(populatedFrame.minY, emptyFrame.minY, accuracy: 0.5, "empty=\(emptyGeometry), populated=\(populatedGeometry)")
+        XCTAssertEqual(populatedFrame.maxY, emptyFrame.maxY, accuracy: 0.5, "empty=\(emptyGeometry), populated=\(populatedGeometry)")
         XCTAssertEqual(populatedLineFrame.minY, emptyLineFrame.minY, accuracy: 0.5)
         XCTAssertEqual(populatedLineFrame.maxY, emptyLineFrame.maxY, accuracy: 0.5)
     }
@@ -170,6 +665,7 @@ final class CheckboxInteractionTests: XCTestCase {
 
         let emptyFrame = try XCTUnwrap(editor.codeBlockFramesForTesting().first)
         let emptyLineFrame = try XCTUnwrap(editor.lineFrameForTesting(lineIndex: 0))
+        let emptyGeometry = editor.lineGeometryDescriptionForTesting(lineIndex: 0)
 
         editor.typeTextForTesting("print('hello')")
         window.contentView?.layoutSubtreeIfNeeded()
@@ -177,8 +673,9 @@ final class CheckboxInteractionTests: XCTestCase {
 
         let populatedFrame = try XCTUnwrap(editor.codeBlockFramesForTesting().first)
         let populatedLineFrame = try XCTUnwrap(editor.lineFrameForTesting(lineIndex: 0))
-        XCTAssertEqual(populatedFrame.minY, emptyFrame.minY, accuracy: 0.5)
-        XCTAssertEqual(populatedFrame.maxY, emptyFrame.maxY, accuracy: 0.5)
+        let populatedGeometry = editor.lineGeometryDescriptionForTesting(lineIndex: 0)
+        XCTAssertEqual(populatedFrame.minY, emptyFrame.minY, accuracy: 0.5, "empty=\(emptyGeometry), populated=\(populatedGeometry)")
+        XCTAssertEqual(populatedFrame.maxY, emptyFrame.maxY, accuracy: 0.5, "empty=\(emptyGeometry), populated=\(populatedGeometry)")
         XCTAssertEqual(populatedLineFrame.minY, emptyLineFrame.minY, accuracy: 0.5)
         XCTAssertEqual(populatedLineFrame.maxY, emptyLineFrame.maxY, accuracy: 0.5)
     }
@@ -843,6 +1340,94 @@ final class CheckboxInteractionTests: XCTestCase {
         XCTAssertEqual(editor.text, "    1. numbered content")
     }
 
+    func testCaretTabAndBacktabChangeTodoHierarchyWithoutEditingContent() throws {
+        let (editor, _) = makeEditor()
+        editor.setText("- [ ] task")
+        let contentRange = try XCTUnwrap(editor.contentRangeForTesting(lineIndex: 0))
+        editor.selectRangeForTesting(NSRange(location: NSMaxRange(contentRange), length: 0))
+
+        editor.pressTabForTesting()
+
+        XCTAssertEqual(editor.presentationTextForTesting, "task")
+        XCTAssertEqual(editor.text, "    - [ ] task")
+
+        editor.pressBacktabForTesting()
+
+        XCTAssertEqual(editor.presentationTextForTesting, "task")
+        XCTAssertEqual(editor.text, "- [ ] task")
+    }
+
+    func testCaretTabAndBacktabChangeBulletHierarchyWithoutEditingContent() throws {
+        let (editor, _) = makeEditor()
+        editor.setText("- bullet")
+        let contentRange = try XCTUnwrap(editor.contentRangeForTesting(lineIndex: 0))
+        editor.selectRangeForTesting(NSRange(location: NSMaxRange(contentRange), length: 0))
+
+        editor.pressTabForTesting()
+
+        XCTAssertEqual(editor.presentationTextForTesting, "bullet")
+        XCTAssertEqual(editor.text, "    - bullet")
+
+        editor.pressBacktabForTesting()
+
+        XCTAssertEqual(editor.presentationTextForTesting, "bullet")
+        XCTAssertEqual(editor.text, "- bullet")
+    }
+
+    func testCaretTabAndBacktabChangeNumberedHierarchyAndPreserveCaretOffset() throws {
+        let (editor, _) = makeEditor()
+        editor.setText("1. numbered")
+        let contentRange = try XCTUnwrap(editor.contentRangeForTesting(lineIndex: 0))
+        let contentOffset = 4
+        editor.selectRangeForTesting(
+            NSRange(location: contentRange.location + contentOffset, length: 0)
+        )
+
+        editor.pressTabForTesting()
+
+        let indentedContentRange = try XCTUnwrap(editor.contentRangeForTesting(lineIndex: 0))
+        XCTAssertEqual(editor.presentationTextForTesting, "a. numbered")
+        XCTAssertEqual(editor.text, "    1. numbered")
+        XCTAssertEqual(
+            editor.selectedRangeForTesting.location,
+            indentedContentRange.location + contentOffset
+        )
+
+        editor.pressBacktabForTesting()
+
+        let restoredContentRange = try XCTUnwrap(editor.contentRangeForTesting(lineIndex: 0))
+        XCTAssertEqual(editor.presentationTextForTesting, "1. numbered")
+        XCTAssertEqual(editor.text, "1. numbered")
+        XCTAssertEqual(
+            editor.selectedRangeForTesting.location,
+            restoredContentRange.location + contentOffset
+        )
+    }
+
+    func testBacktabAtTopLevelStructuredItemDoesNotDeleteContent() throws {
+        let (editor, _) = makeEditor()
+        editor.setText("- [ ] task")
+        let contentRange = try XCTUnwrap(editor.contentRangeForTesting(lineIndex: 0))
+        editor.selectRangeForTesting(NSRange(location: contentRange.location + 2, length: 0))
+
+        editor.pressBacktabForTesting()
+
+        XCTAssertEqual(editor.presentationTextForTesting, "task")
+        XCTAssertEqual(editor.text, "- [ ] task")
+    }
+
+    func testCaretTabInPlainTextStillInsertsLiteralIndentation() {
+        let (editor, _) = makeEditor()
+        editor.setText("plain")
+        editor.selectRangeForTesting(NSRange(location: 2, length: 0))
+
+        editor.pressTabForTesting()
+
+        XCTAssertEqual(editor.presentationTextForTesting, "pl    ain")
+        XCTAssertEqual(editor.text, "pl    ain")
+        XCTAssertEqual(editor.selectedRangeForTesting, NSRange(location: 6, length: 0))
+    }
+
     func testTypingInNumberedContentPreservesMarkerAndMarkdown() throws {
         let (editor, _) = makeEditor()
         editor.setText("1. one")
@@ -877,6 +1462,35 @@ final class CheckboxInteractionTests: XCTestCase {
 
         XCTAssertEqual(editor.presentationTextForTesting, "")
         XCTAssertEqual(editor.text, "")
+    }
+
+    private func makeScrolledSplitCodeBlockEditor() throws -> (
+        editor: InlineTodoTextEditorContainer,
+        window: NSWindow,
+        splitLineIndex: Int,
+        lowerCodeLineIndex: Int
+    ) {
+        let (editor, window) = makeEditor()
+        window.setContentSize(NSSize(width: 620, height: 300))
+        let precedingLines = (1...45).map { "prefix\($0)" }
+        let codeLines = (1...10).map { "code\($0)" }
+        editor.setText(
+            (precedingLines + ["```python"] + codeLines + ["```"]).joined(separator: "\n")
+        )
+        window.contentView?.layoutSubtreeIfNeeded()
+        editor.layoutSubtreeIfNeeded()
+        editor.scrollToBottomForTesting()
+
+        let splitLineIndex = precedingLines.count + 3
+        let splitLine = try XCTUnwrap(editor.contentRangeForTesting(lineIndex: splitLineIndex))
+        editor.selectRangeForTesting(splitLine)
+        editor.typeTextForTesting("/n")
+        editor.pressReturnForTesting()
+
+        let lines = editor.presentationTextForTesting.components(separatedBy: "\n")
+        XCTAssertEqual(lines[splitLineIndex], "1. ")
+        let lowerCodeLineIndex = try XCTUnwrap(lines.firstIndex(of: "code5"))
+        return (editor, window, splitLineIndex, lowerCodeLineIndex)
     }
 
     private func makeEditor() -> (InlineTodoTextEditorContainer, NSWindow) {

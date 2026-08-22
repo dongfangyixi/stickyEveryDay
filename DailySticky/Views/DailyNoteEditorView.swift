@@ -32,6 +32,12 @@ private enum CodeBlockLayout {
     static let languageChipTrailingPadding: CGFloat = 6
 }
 
+private struct TerminalEmptyLineLayoutMetrics: Equatable {
+    var textIndent: CGFloat
+    var spacingBefore: CGFloat
+    var lineHeight: CGFloat
+}
+
 enum OCRSearchRevealGeometry {
     static func displayRect(
         for normalizedRect: CGRect,
@@ -835,7 +841,7 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     }
 
     private let scrollView = PinadayScrollView()
-    private let textView = TodoTextView()
+    private let textView = InlineTodoTextEditorContainer.makeTextView()
     private let overlayView = TodoCheckboxOverlayView()
     private let imageInteractionView = MarkdownImageInteractionOverlayView()
     private let imageOverlayView = MarkdownImageOverlayView()
@@ -919,6 +925,15 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         }
 
         return super.hitTest(point)
+    }
+
+    private static func makeTextView() -> TodoTextView {
+        let textStorage = NSTextStorage()
+        let layoutManager = PinadayLayoutManager()
+        let textContainer = NSTextContainer()
+        textStorage.addLayoutManager(layoutManager)
+        layoutManager.addTextContainer(textContainer)
+        return TodoTextView(frame: .zero, textContainer: textContainer)
     }
 
     func setTheme(_ palette: AppTheme.Palette) {
@@ -1353,8 +1368,9 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             let overlayPoint = self.overlayView.convert(point, from: self.textView)
             return self.overlayView.cursor(at: overlayPoint)
         }
-        textView.selectionDragDidEndHandler = { [weak self] in
+        textView.selectionDragDidEndHandler = { [weak self] event in
             guard let self else { return }
+            self.normalizeEmptyNumberedCaretAfterClickIfNeeded(event)
             self.applyDisplayAttributes()
             self.refreshOverlay()
         }
@@ -2132,6 +2148,17 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             return true
         }
 
+        switch kind(at: line.index) {
+        case .task, .bullet, .numbered, .continuation:
+            return adjustStructuredCaretIndent(
+                line: line,
+                selectedRange: selectedRange,
+                delta: delta
+            )
+        case .normal, .quote, .codeBlock, .horizontalRule, .tableRow:
+            break
+        }
+
         if delta > 0 {
             let indentation = String(repeating: " ", count: delta)
             return applyTextStorageEdit(
@@ -2179,6 +2206,74 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             replacement: "",
             selectedRange: NSRange(location: removalRange.location, length: 0)
         ) {}
+    }
+
+    private func adjustStructuredCaretIndent(
+        line: DisplayLineInfo,
+        selectedRange: NSRange,
+        delta: Int
+    ) -> Bool {
+        guard lineKinds.indices.contains(line.index) else {
+            return true
+        }
+
+        var updatedKinds = lineKinds
+
+        switch updatedKinds[line.index] {
+        case .task(let indentColumns, let isCompleted):
+            let newIndentColumns = max(0, indentColumns + delta)
+            guard newIndentColumns != indentColumns else { return true }
+            updatedKinds[line.index] = .task(
+                indentColumns: newIndentColumns,
+                isCompleted: isCompleted
+            )
+
+        case .bullet(let indentColumns):
+            let newIndentColumns = max(0, indentColumns + delta)
+            guard newIndentColumns != indentColumns else { return true }
+            updatedKinds[line.index] = .bullet(indentColumns: newIndentColumns)
+
+        case .numbered(let indentColumns, let number):
+            let newIndentColumns = max(0, indentColumns + delta)
+            guard newIndentColumns != indentColumns else { return true }
+            updatedKinds[line.index] = .numbered(
+                indentColumns: newIndentColumns,
+                number: newIndentColumns == indentColumns ? number : 1
+            )
+
+        case .continuation(let indentColumns):
+            let newIndentColumns = max(0, indentColumns + delta)
+            guard newIndentColumns != indentColumns else { return true }
+            updatedKinds[line.index] = .continuation(indentColumns: newIndentColumns)
+
+        case .normal, .quote, .codeBlock, .horizontalRule, .tableRow:
+            return false
+        }
+
+        updatedKinds = renumberedNumberedLists(updatedKinds)
+        let updatedText = presentationText(lines: displayLines(), lineKinds: updatedKinds)
+        let updatedInfos = lineInfos(for: updatedText, lineKinds: updatedKinds)
+        guard updatedInfos.indices.contains(line.index) else {
+            return true
+        }
+
+        let contentOffset = min(
+            max(0, selectedRange.location - line.contentRange.location),
+            updatedInfos[line.index].contentRange.length
+        )
+        let updatedSelectedRange = NSRange(
+            location: updatedInfos[line.index].contentRange.location + contentOffset,
+            length: 0
+        )
+        let fullRange = NSRange(location: 0, length: (textView.string as NSString).length)
+
+        return applyTextStorageEdit(
+            range: fullRange,
+            replacement: updatedText,
+            selectedRange: updatedSelectedRange
+        ) {
+            lineKinds = updatedKinds
+        }
     }
 
     private func adjustSelectedLinesIndent(by delta: Int) -> Bool {
@@ -2302,6 +2397,7 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             ))
         }
 
+        updatedKinds = renumberedNumberedLists(updatedKinds)
         let updatedText = presentationText(lines: updatedLines, lineKinds: updatedKinds)
         let updatedSelectedRange = mappedSelection(selectedRange, through: textEdits)
         let fullRange = NSRange(location: 0, length: (textView.string as NSString).length)
@@ -2312,11 +2408,15 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             selectedRange: updatedSelectedRange
         ) {
             lineKinds = updatedKinds
-            renumberNumberedLists()
         }
     }
 
     private func renumberNumberedLists() {
+        lineKinds = renumberedNumberedLists(lineKinds)
+    }
+
+    private func renumberedNumberedLists(_ lineKinds: [LineKind]) -> [LineKind] {
+        var lineKinds = lineKinds
         var countersByLevel: [Int: Int] = [:]
         var isInsideNumberedBlock = false
 
@@ -2350,6 +2450,8 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
                 isInsideNumberedBlock = false
             }
         }
+
+        return lineKinds
     }
 
     private func synchronizeNumberedListPrefixes() {
@@ -2664,6 +2766,40 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             : NSMaxRange(line.contentRange)
         textView.setSelectedRange(NSRange(location: targetLocation, length: 0))
         return true
+    }
+
+    private func normalizeEmptyNumberedCaretAfterClickIfNeeded(_ event: NSEvent) {
+        let modifierFlags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let selectedRange = textView.selectedRange()
+        guard event.clickCount == 1,
+              modifierFlags.isEmpty,
+              selectedRange.length <= 1,
+              let line = lineInfo(at: selectedRange.location),
+              case .numbered = kind(at: line.index),
+              line.contentRange.length == 0,
+              let prefixRange = line.prefixRange,
+              let layoutManager = textView.layoutManager,
+              let textContainer = textView.textContainer
+        else {
+            return
+        }
+
+        layoutManager.ensureLayout(for: textContainer)
+        let prefixGlyphRange = layoutManager.glyphRange(
+            forCharacterRange: prefixRange,
+            actualCharacterRange: nil
+        )
+        let prefixRect = layoutManager.boundingRect(
+            forGlyphRange: prefixGlyphRange,
+            in: textContainer
+        )
+        let point = textView.convert(event.locationInWindow, from: nil)
+        let prefixTrailingX = textView.textContainerOrigin.x + prefixRect.maxX
+        guard point.x >= prefixTrailingX else {
+            return
+        }
+
+        textView.setSelectedRange(line.contentRange)
     }
 
     private func deleteSelectionPreservingLineKinds() -> Bool {
@@ -3430,6 +3566,10 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         }
     }
 
+    var codeBlockLineIndicesForTesting: [Int] {
+        lineKinds.indices.filter { lineKinds[$0].isCodeBlock }
+    }
+
     func slashCommandRawValueForTesting(query: String) -> String? {
         guard let index = bestSlashCommandIndex(for: query) else {
             return nil
@@ -3477,6 +3617,64 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             width: rect.width,
             height: rect.height
         )
+    }
+
+    func glyphFrameForTesting(lineIndex: Int) -> NSRect? {
+        let infos = lineInfos()
+        guard infos.indices.contains(lineIndex),
+              let layoutManager = textView.layoutManager,
+              let textContainer = textView.textContainer,
+              infos[lineIndex].contentRange.length > 0
+        else {
+            return nil
+        }
+
+        layoutManager.ensureLayout(for: textContainer)
+        let glyphRange = layoutManager.glyphRange(
+            forCharacterRange: infos[lineIndex].contentRange,
+            actualCharacterRange: nil
+        )
+        guard glyphRange.length > 0 else {
+            return nil
+        }
+
+        let rect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+        let visibleBounds = scrollView.contentView.bounds
+        let origin = textView.textContainerOrigin
+        return NSRect(
+            x: origin.x + rect.minX - visibleBounds.origin.x,
+            y: origin.y + rect.minY - visibleBounds.origin.y,
+            width: rect.width,
+            height: rect.height
+        )
+    }
+
+    func lineGeometryDescriptionForTesting(lineIndex: Int) -> String {
+        let infos = lineInfos()
+        guard infos.indices.contains(lineIndex),
+              let layoutManager = textView.layoutManager,
+              let textContainer = textView.textContainer
+        else {
+            return "unavailable"
+        }
+
+        layoutManager.ensureLayout(for: textContainer)
+        let line = infos[lineIndex]
+        let glyphRange = layoutManager.glyphRange(
+            forCharacterRange: line.lineRange,
+            actualCharacterRange: nil
+        )
+        var fragments: [String] = []
+        layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) {
+            lineRect,
+            usedRect,
+            _,
+            fragmentGlyphRange,
+            _ in
+            fragments.append("line=\(lineRect) used=\(usedRect) glyphs=\(fragmentGlyphRange)")
+        }
+        let terminalMetrics = (layoutManager as? PinadayLayoutManager)?.terminalEmptyLineMetrics
+        return "content=\(line.contentRange) lineRange=\(line.lineRange) glyphRange=\(glyphRange) fragments=[\(fragments.joined(separator: "; "))] extraLine=\(layoutManager.extraLineFragmentRect) extraUsed=\(layoutManager.extraLineFragmentUsedRect) terminalMetrics=\(String(describing: terminalMetrics))"
     }
 
     @discardableResult
@@ -3547,6 +3745,12 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     func pressTabForTesting() {
         if !self.textView(textView, doCommandBy: #selector(NSResponder.insertTab(_:))) {
             textView.insertTab(nil)
+        }
+    }
+
+    func pressBacktabForTesting() {
+        if !self.textView(textView, doCommandBy: #selector(NSResponder.insertBacktab(_:))) {
+            textView.insertBacktab(nil)
         }
     }
 
@@ -3825,6 +4029,63 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             && insertionLocation <= NSMaxRange(line.contentRange)
     }
 
+    func mouseCanPlaceCaretWithoutScrollingForTesting(
+        lineIndex: Int,
+        utf16Offset: Int
+    ) -> Bool {
+        let infos = lineInfos()
+        guard infos.indices.contains(lineIndex),
+              let layoutManager = textView.layoutManager,
+              let textContainer = textView.textContainer
+        else {
+            return false
+        }
+
+        layoutManager.ensureLayout(for: textContainer)
+        let line = infos[lineIndex]
+        guard let lineRect = lineFragmentRect(for: line, layoutManager: layoutManager) else {
+            return false
+        }
+
+        let boundedOffset = max(0, min(utf16Offset, line.contentRange.length))
+        let targetLocation = line.contentRange.location + boundedOffset
+        let x: CGFloat
+        if targetLocation < NSMaxRange(line.contentRange) {
+            let glyphRange = layoutManager.glyphRange(
+                forCharacterRange: NSRange(location: targetLocation, length: 1),
+                actualCharacterRange: nil
+            )
+            x = glyphRange.length > 0
+                ? layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer).minX + 1
+                : lineRect.minX + 1
+        } else if targetLocation > line.lineRange.location {
+            let glyphRange = layoutManager.glyphRange(
+                forCharacterRange: NSRange(location: targetLocation - 1, length: 1),
+                actualCharacterRange: nil
+            )
+            x = glyphRange.length > 0
+                ? layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer).maxX + 1
+                : lineRect.minX + 1
+        } else {
+            x = lineRect.minX + 1
+        }
+        let point = NSPoint(
+            x: textView.textContainerOrigin.x + x,
+            y: textView.textContainerOrigin.y + lineRect.midY
+        )
+        let pointInContainer = convert(point, from: textView)
+        guard bounds.contains(pointInContainer),
+              hitTest(pointInContainer) === textView
+        else {
+            return false
+        }
+
+        let insertionLocation = textView.characterIndexForInsertion(at: point)
+        return insertionLocation >= line.contentRange.location
+            && insertionLocation <= NSMaxRange(line.contentRange)
+            && abs(insertionLocation - targetLocation) <= 1
+    }
+
     func dragSelectWithMouseEventsForTesting(
         fromLine: Int,
         utf16Offset: Int,
@@ -3899,6 +4160,84 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         return textView.selectedRange().length > 0
     }
 
+    func clickLineWithWindowEventForTesting(
+        lineIndex: Int,
+        utf16Offset: Int
+    ) -> Bool {
+        guard let point = textPointForMouseEventTesting(
+            lineIndex: lineIndex,
+            utf16Offset: utf16Offset,
+            scrollToVisible: false
+        ),
+        textView.visibleRect.contains(point),
+        let window
+        else {
+            return false
+        }
+
+        let expectedRange = lineInfos()[lineIndex].lineRange
+        let pointInWindow = textView.convert(point, to: nil)
+        let timestamp = ProcessInfo.processInfo.systemUptime
+        guard let mouseDown = NSEvent.mouseEvent(
+            with: .leftMouseDown,
+            location: pointInWindow,
+            modifierFlags: [],
+            timestamp: timestamp,
+            windowNumber: window.windowNumber,
+            context: nil,
+            eventNumber: 20,
+            clickCount: 1,
+            pressure: 1
+        ),
+        let mouseUp = NSEvent.mouseEvent(
+            with: .leftMouseUp,
+            location: pointInWindow,
+            modifierFlags: [],
+            timestamp: timestamp + 0.01,
+            windowNumber: window.windowNumber,
+            context: nil,
+            eventNumber: 21,
+            clickCount: 1,
+            pressure: 0
+        ) else {
+            return false
+        }
+
+        let originalCursorLocation = CGEvent(source: nil)?.location
+        window.setFrameOrigin(NSPoint(x: 20, y: 20))
+        window.orderFront(nil)
+        window.makeKey()
+        window.makeFirstResponder(textView)
+        warpCursorForMouseEventTesting(to: pointInWindow, in: window)
+        defer {
+            if let originalCursorLocation {
+                CGWarpMouseCursorPosition(originalCursorLocation)
+            }
+        }
+
+        NSApp.postEvent(mouseUp, atStart: true)
+        window.sendEvent(mouseDown)
+        return textView.selectedRange().location >= expectedRange.location
+            && textView.selectedRange().location <= NSMaxRange(expectedRange)
+    }
+
+    func scrollToBottomForTesting() {
+        layoutSubtreeIfNeeded()
+        guard let documentView = scrollView.documentView else {
+            return
+        }
+
+        let clipView = scrollView.contentView
+        clipView.scroll(
+            to: NSPoint(
+                x: clipView.bounds.origin.x,
+                y: max(0, documentView.bounds.height - clipView.bounds.height)
+            )
+        )
+        scrollView.reflectScrolledClipView(clipView)
+        layoutSubtreeIfNeeded()
+    }
+
     private func warpCursorForMouseEventTesting(to windowPoint: NSPoint, in window: NSWindow) {
         guard let primaryScreen = NSScreen.screens.first else {
             return
@@ -3914,7 +4253,8 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
 
     private func textPointForMouseEventTesting(
         lineIndex: Int,
-        utf16Offset: Int
+        utf16Offset: Int,
+        scrollToVisible: Bool = true
     ) -> NSPoint? {
         let infos = lineInfos()
         guard infos.indices.contains(lineIndex),
@@ -3927,7 +4267,9 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         let line = infos[lineIndex]
         let offset = max(0, min(utf16Offset, line.contentRange.length))
         let location = line.contentRange.location + offset
-        textView.scrollRangeToVisible(NSRange(location: location, length: 0))
+        if scrollToVisible {
+            textView.scrollRangeToVisible(NSRange(location: location, length: 0))
+        }
         layoutSubtreeIfNeeded()
         layoutManager.ensureLayout(for: textContainer)
 
@@ -3950,6 +4292,13 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
                 actualCharacterRange: nil
             )
             x = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer).maxX + 1
+        } else if let prefixRange = line.prefixRange,
+                  prefixRange.length > 0 {
+            let glyphRange = layoutManager.glyphRange(
+                forCharacterRange: prefixRange,
+                actualCharacterRange: nil
+            )
+            x = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer).maxX + 4
         } else {
             x = lineRect.minX + 1
         }
@@ -3968,6 +4317,56 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             return (textView.frame, layoutManager.usedRect(for: textContainer))
         }
         return (textView.frame, .zero)
+    }
+
+    func interactionGeometryDescriptionForTesting(lineIndex: Int) -> String {
+        let infos = lineInfos()
+        guard infos.indices.contains(lineIndex),
+              let layoutManager = textView.layoutManager,
+              let textContainer = textView.textContainer,
+              let point = textPointForMouseEventTesting(
+                lineIndex: lineIndex,
+                utf16Offset: 2,
+                scrollToVisible: false
+              )
+        else {
+            return "interaction geometry unavailable"
+        }
+
+        layoutManager.ensureLayout(for: textContainer)
+        let pointInContainer = convert(point, from: textView)
+        return "paletteHidden=\(slashPaletteView.isHidden) paletteFrame=\(slashPaletteView.frame) "
+            + "textFrame=\(textView.frame) textBounds=\(textView.bounds) visible=\(textView.visibleRect) "
+            + "clip=\(scrollView.contentView.bounds) used=\(layoutManager.usedRect(for: textContainer)) "
+            + "selection=\(textView.selectedRange()) "
+            + "point=\(point) pointInContainer=\(pointInContainer) "
+            + "visibleContains=\(textView.visibleRect.contains(point)) "
+            + "containerContains=\(bounds.contains(pointInContainer)) "
+            + "hit=\(String(describing: hitTest(pointInContainer).map { type(of: $0) }))"
+    }
+
+    var isSlashCommandPaletteHiddenForTesting: Bool {
+        slashPaletteView.isHidden
+    }
+
+    func codeLanguageOverlayHitTestingForTesting() -> (target: Bool, mirroredTarget: Bool)? {
+        refreshOverlay()
+        guard let target = overlayView.codeLanguageTargetCenterForTesting,
+              let overlaySuperview = overlayView.superview
+        else {
+            return nil
+        }
+
+        let mirroredTarget = NSPoint(
+            x: target.x,
+            y: overlayView.bounds.maxY - target.y
+        )
+        let targetInSuperview = overlayView.convert(target, to: overlaySuperview)
+        let mirroredTargetInSuperview = overlayView.convert(mirroredTarget, to: overlaySuperview)
+        return (
+            overlayView.hitTest(targetInSuperview) === overlayView,
+            overlayView.hitTest(mirroredTargetInSuperview) === overlayView
+        )
     }
 
     func selectionDisplayRefreshIsDeferredDuringMouseTrackingForTesting() -> Bool {
@@ -4193,13 +4592,47 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
 
         var markdownLines: [String] = []
         let nsText = textView.string as NSString
+        let infos = lineInfos()
+        let completeCodeBlocks = markdownCodeRenderBlocks(lineInfos: infos).reduce(
+            into: [Int: MarkdownCodeRenderBlock]()
+        ) { result, block in
+            guard infos.indices.contains(block.lineRange.lowerBound),
+                  infos.indices.contains(block.lineRange.upperBound - 1)
+            else {
+                return
+            }
 
-        for line in lineInfos() {
+            let firstLine = infos[block.lineRange.lowerBound]
+            let lastLine = infos[block.lineRange.upperBound - 1]
+            let blockContentRange = NSRange(
+                location: firstLine.contentRange.location,
+                length: NSMaxRange(lastLine.contentRange) - firstLine.contentRange.location
+            )
+            if selectedRange.location <= blockContentRange.location,
+               NSMaxRange(selectedRange) >= NSMaxRange(blockContentRange) {
+                result[block.lineRange.lowerBound] = block
+            }
+        }
+
+        var lineIndex = 0
+        while lineIndex < infos.count {
+            if let block = completeCodeBlocks[lineIndex] {
+                markdownLines.append("```" + (block.language ?? ""))
+                for codeLineIndex in block.lineRange {
+                    markdownLines.append(infos[codeLineIndex].text)
+                }
+                markdownLines.append("```")
+                lineIndex = block.lineRange.upperBound
+                continue
+            }
+
+            let line = infos[lineIndex]
             if case .numbered = kind(at: line.index) {
                 let visibleLineRange = rawTextRange(for: line, in: nsText)
                 if let intersection = visibleLineRange.intersection(selectedRange) {
                     markdownLines.append(nsText.substring(with: intersection))
                 }
+                lineIndex += 1
                 continue
             }
 
@@ -4208,6 +4641,7 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
                    line.contentRange.length == 0 {
                     markdownLines.append(markdownLinePrefix(for: kind(at: line.index), at: line.index))
                 }
+                lineIndex += 1
                 continue
             }
 
@@ -4215,6 +4649,7 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             let includesLineStart = selectedRange.location <= line.contentRange.location
             let prefix = includesLineStart ? markdownLinePrefix(for: kind(at: line.index), at: line.index) : ""
             markdownLines.append(prefix + selectedText)
+            lineIndex += 1
         }
 
         guard !markdownLines.isEmpty else {
@@ -4757,23 +5192,16 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             tableHighlights = [:]
         }
         for block in markdownCodeRenderBlocks(lineInfos: displayLineInfos) {
-            guard displayLineInfos.indices.contains(block.lineRange.lowerBound),
-                  displayLineInfos.indices.contains(block.lineRange.upperBound - 1),
-                  let firstRect = lineFragmentRect(for: displayLineInfos[block.lineRange.lowerBound], layoutManager: layoutManager),
-                  let lastRect = lineFragmentRect(for: displayLineInfos[block.lineRange.upperBound - 1], layoutManager: layoutManager)
-            else {
+            guard let blockFrame = codeBlockFrame(
+                for: block,
+                lineInfos: displayLineInfos,
+                layoutManager: layoutManager,
+                textContainerOrigin: textContainerOrigin,
+                visibleBounds: visibleBounds
+            ) else {
                 continue
             }
-
-            let blockY = textContainerOrigin.y
-                + firstRect.minY
-                + CodeBlockLayout.externalMargin
-                - visibleBounds.origin.y
-            let blockBottom = textContainerOrigin.y
-                + lastRect.maxY
-                - CodeBlockLayout.externalMargin
-                - visibleBounds.origin.y
-            guard blockBottom > -24, blockY < bounds.height + 24 else {
+            guard blockFrame.maxY > -24, blockFrame.minY < bounds.height + 24 else {
                 continue
             }
 
@@ -4785,20 +5213,7 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
                             ?? language.localized("Plain text"),
                         lineRange: block.lineRange
                     ),
-                    frame: NSRect(
-                        x: max(
-                            0,
-                            textContainerOrigin.x
-                                - visibleBounds.origin.x
-                                + CodeBlockLayout.horizontalInset
-                        ),
-                        y: blockY,
-                        width: max(80, textView.bounds.width - textView.textContainerInset.width * 2 - 2),
-                        height: max(
-                            lineHeight() + CodeBlockLayout.verticalPadding * 2,
-                            blockBottom - blockY
-                        )
-                    )
+                    frame: blockFrame
                 )
             )
         }
@@ -5010,6 +5425,8 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             return
         }
 
+        updateTerminalEmptyLineLayoutMetrics()
+
         let selectedRange = textView.selectedRange()
         let completedColor = palette.completedTextNS
         let codeBackground = palette.codeBackgroundNS
@@ -5203,6 +5620,14 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         textView.setNeedsDisplay(textView.visibleRect)
     }
 
+    private func updateTerminalEmptyLineLayoutMetrics() {
+        guard let layoutManager = textView.layoutManager as? PinadayLayoutManager else {
+            return
+        }
+
+        layoutManager.terminalEmptyLineMetrics = terminalEmptyLineLayoutMetrics()
+    }
+
     private var isComposingMarkedText: Bool {
         textView.hasMarkedText()
     }
@@ -5271,16 +5696,14 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     }
 
     private func paragraphAttributeRange(for line: DisplayLineInfo) -> NSRange {
-        let fullLength = (textView.string as NSString).length
         if line.lineRange.length > 0 {
             return line.lineRange
         }
 
-        if fullLength == 0 {
-            return NSRange(location: 0, length: 0)
-        }
-
-        return NSRange(location: max(0, min(line.contentRange.location, fullLength - 1)), length: 1)
+        // A terminal empty paragraph has no backing character. Styling the
+        // preceding newline mutates the previous paragraph and makes the
+        // empty line jump when its first character is inserted.
+        return NSRange(location: line.contentRange.location, length: 0)
     }
 
     private func updateTypingAttributesForCurrentSelection() {
@@ -5319,7 +5742,7 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
                 ? CodeBlockLayout.verticalPadding + CodeBlockLayout.externalMargin
                 : 0
             style.paragraphSpacing = boundary.isLast
-                ? CodeBlockLayout.verticalPadding + CodeBlockLayout.externalMargin * 2
+                ? CodeBlockLayout.verticalPadding + CodeBlockLayout.externalMargin
                 : 0
         }
         style.lineBreakMode = .byWordWrapping
@@ -5345,6 +5768,21 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             : lineHeight()
         style.lineBreakMode = .byWordWrapping
         return style
+    }
+
+    private func terminalEmptyLineLayoutMetrics() -> TerminalEmptyLineLayoutMetrics? {
+        guard let terminalLine = lineInfos().last,
+              terminalLine.lineRange.length == 0
+        else {
+            return nil
+        }
+
+        let style = paragraphStyle(for: terminalLine)
+        return TerminalEmptyLineLayoutMetrics(
+            textIndent: style.firstLineHeadIndent,
+            spacingBefore: terminalLine.index == 0 ? 0 : style.paragraphSpacingBefore,
+            lineHeight: max(lineHeight(), style.minimumLineHeight)
+        )
     }
 
     private func codeBlockBoundary(at lineIndex: Int) -> (isFirst: Bool, isLast: Bool) {
@@ -5918,6 +6356,84 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         return NSRect(x: 0, y: 0, width: bounds.width, height: lineHeight())
     }
 
+    private func lineContentRect(
+        for line: DisplayLineInfo,
+        layoutManager: NSLayoutManager
+    ) -> NSRect? {
+        if line.lineRange.length == 0,
+           layoutManager.extraLineFragmentTextContainer != nil {
+            return layoutManager.extraLineFragmentUsedRect
+        }
+
+        if line.lineRange.length > 0 {
+            let glyphRange = layoutManager.glyphRange(
+                forCharacterRange: line.lineRange,
+                actualCharacterRange: nil
+            )
+            if glyphRange.length > 0 {
+                var bounds = NSRect.null
+                layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) {
+                    _,
+                    usedRect,
+                    _,
+                    _,
+                    _ in
+                    bounds = bounds.union(usedRect)
+                }
+                if !bounds.isNull {
+                    return bounds
+                }
+            }
+        }
+
+        return lineFragmentRect(for: line, layoutManager: layoutManager)
+    }
+
+    private func codeBlockFrame(
+        for block: MarkdownCodeRenderBlock,
+        lineInfos: [DisplayLineInfo],
+        layoutManager: NSLayoutManager,
+        textContainerOrigin: NSPoint,
+        visibleBounds: NSRect
+    ) -> NSRect? {
+        guard lineInfos.indices.contains(block.lineRange.lowerBound),
+              lineInfos.indices.contains(block.lineRange.upperBound - 1),
+              let firstRect = lineContentRect(
+                  for: lineInfos[block.lineRange.lowerBound],
+                  layoutManager: layoutManager
+              ),
+              let lastRect = lineContentRect(
+                  for: lineInfos[block.lineRange.upperBound - 1],
+                  layoutManager: layoutManager
+              )
+        else {
+            return nil
+        }
+
+        let minY = textContainerOrigin.y
+            + firstRect.minY
+            - CodeBlockLayout.verticalPadding
+            - visibleBounds.origin.y
+        let maxY = textContainerOrigin.y
+            + lastRect.maxY
+            + CodeBlockLayout.verticalPadding
+            - visibleBounds.origin.y
+        return NSRect(
+            x: max(
+                0,
+                textContainerOrigin.x
+                    - visibleBounds.origin.x
+                    + CodeBlockLayout.horizontalInset
+            ),
+            y: minY,
+            width: max(80, textView.bounds.width - textView.textContainerInset.width * 2 - 2),
+            height: max(
+                lineHeight() + CodeBlockLayout.verticalPadding * 2,
+                maxY - minY
+            )
+        )
+    }
+
     private func markdownText() -> String {
         let lines = displayLines()
         var markdownLines: [String] = []
@@ -6472,7 +6988,9 @@ private final class SlashCommandPaletteView: NSView {
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
-        guard bounds.contains(point) else {
+        guard !isHiddenOrHasHiddenAncestor,
+              bounds.contains(point)
+        else {
             return nil
         }
 
@@ -6802,7 +7320,7 @@ private final class SlashCommandButton: NSButton {
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
-        bounds.contains(point) ? self : nil
+        !isHiddenOrHasHiddenAncestor && bounds.contains(point) ? self : nil
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -6975,6 +7493,61 @@ enum EditorContextMenuBuilder {
     }
 }
 
+private final class PinadayLayoutManager: NSLayoutManager {
+    var terminalEmptyLineMetrics: TerminalEmptyLineLayoutMetrics? {
+        didSet {
+            guard terminalEmptyLineMetrics != oldValue else {
+                return
+            }
+
+            for textContainer in textContainers {
+                textContainerChangedGeometry(textContainer)
+            }
+        }
+    }
+
+    override func setExtraLineFragmentRect(
+        _ fragmentRect: NSRect,
+        usedRect: NSRect,
+        textContainer: NSTextContainer
+    ) {
+        setStableExtraLineFragmentRect(
+            fragmentRect,
+            usedRect: usedRect,
+            textContainer: textContainer
+        )
+    }
+
+    private func setStableExtraLineFragmentRect(
+        _ fragmentRect: NSRect,
+        usedRect: NSRect,
+        textContainer: NSTextContainer
+    ) {
+        guard let metrics = terminalEmptyLineMetrics else {
+            super.setExtraLineFragmentRect(
+                fragmentRect,
+                usedRect: usedRect,
+                textContainer: textContainer
+            )
+            return
+        }
+
+        var stableFragmentRect = fragmentRect
+        stableFragmentRect.size.height = metrics.spacingBefore + metrics.lineHeight
+
+        var stableUsedRect = usedRect
+        stableUsedRect.origin.x = metrics.textIndent
+        stableUsedRect.origin.y = stableFragmentRect.minY + metrics.spacingBefore
+        stableUsedRect.size.height = metrics.lineHeight
+
+        super.setExtraLineFragmentRect(
+            stableFragmentRect,
+            usedRect: stableUsedRect,
+            textContainer: textContainer
+        )
+    }
+}
+
 private final class TodoTextView: NSTextView {
     var copyHandler: (() -> Bool)?
     var canCopyHandler: (() -> Bool)?
@@ -6989,7 +7562,7 @@ private final class TodoTextView: NSTextView {
     var goToNoteTitle = "Go to Note"
     var backToTodayTitle = "Back to today"
     var isShowingToday = true
-    var selectionDragDidEndHandler: (() -> Void)?
+    var selectionDragDidEndHandler: ((NSEvent) -> Void)?
     var checkboxCursorProvider: ((NSPoint) -> NSCursor?)?
     var imageCursorProvider: ((NSPoint) -> NSCursor?)?
     var imageCursorRects: [NSRect] = [] {
@@ -7163,7 +7736,7 @@ private final class TodoTextView: NSTextView {
         isTrackingTextSelection = true
         defer {
             isTrackingTextSelection = false
-            selectionDragDidEndHandler?()
+            selectionDragDidEndHandler?(event)
         }
         super.mouseDown(with: event)
     }
@@ -8629,7 +9202,7 @@ private final class TodoCheckboxOverlayView: NSView {
     }
 
     func codeLanguageCursorForTesting(at point: NSPoint) -> NSCursor? {
-        codeLanguageTarget(at: point) == nil ? nil : .pointingHand
+        cursor(at: point)
     }
 #endif
 
@@ -8646,9 +9219,9 @@ private final class TodoCheckboxOverlayView: NSView {
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         let localPoint = convert(point, from: superview)
-        return lineIndex(at: localPoint) == nil && codeLanguageTarget(at: localPoint) == nil
-            ? nil
-            : self
+        let line = lineIndex(at: localPoint)
+        let languageTarget = codeLanguageTarget(at: localPoint)
+        return line == nil && languageTarget == nil ? nil : self
     }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
@@ -8699,7 +9272,9 @@ private final class TodoCheckboxOverlayView: NSView {
     }
 
     func cursor(at point: NSPoint) -> NSCursor? {
-        lineIndex(at: point) == nil ? nil : .pointingHand
+        lineIndex(at: point) == nil && codeLanguageTarget(at: point) == nil
+            ? nil
+            : .pointingHand
     }
 
     @discardableResult
