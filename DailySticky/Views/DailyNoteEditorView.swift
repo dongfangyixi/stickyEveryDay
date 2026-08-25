@@ -32,6 +32,84 @@ private enum CodeBlockLayout {
     static let languageChipTrailingPadding: CGFloat = 6
 }
 
+private struct NoteLayoutMetrics {
+    let scale: CGFloat
+
+    init(scale: CGFloat) {
+        self.scale = CGFloat(NoteZoom.clamped(Double(scale)))
+    }
+
+    func scaled(_ value: CGFloat) -> CGFloat {
+        value * scale
+    }
+
+    var baseFont: NSFont {
+        .systemFont(ofSize: scaled(14))
+    }
+
+    var baseLineHeight: CGFloat {
+        ceil(baseFont.ascender - baseFont.descender + baseFont.leading)
+    }
+
+    var numberedPrefixFont: NSFont {
+        .systemFont(ofSize: scaled(12), weight: .semibold)
+    }
+
+    var codeFont: NSFont {
+        .monospacedSystemFont(ofSize: scaled(13), weight: .regular)
+    }
+
+    var codeBoldFont: NSFont {
+        .monospacedSystemFont(ofSize: scaled(13), weight: .semibold)
+    }
+
+    var tableBodyFont: NSFont {
+        .systemFont(ofSize: scaled(12), weight: .regular)
+    }
+
+    var tableHeaderFont: NSFont {
+        .systemFont(ofSize: scaled(12), weight: .semibold)
+    }
+
+    var tableCodeFont: NSFont {
+        .monospacedSystemFont(ofSize: scaled(11), weight: .regular)
+    }
+
+    var checkboxFrameWidth: CGFloat { scaled(TodoLayout.checkboxFrameWidth) }
+    var checkboxFrameHeight: CGFloat { scaled(TodoLayout.checkboxFrameHeight) }
+    var checkboxVisualSize: CGFloat { scaled(TodoLayout.checkboxVisualSize) }
+    var checkboxTextGap: CGFloat { scaled(TodoLayout.checkboxTextGap) }
+    var checkboxDrawInset: CGFloat { (checkboxFrameWidth - checkboxVisualSize) / 2 }
+    var taskTextOffset: CGFloat { checkboxVisualSize + checkboxTextGap }
+    var listLevelIndent: CGFloat { taskTextOffset }
+
+    var codeVerticalPadding: CGFloat { scaled(CodeBlockLayout.verticalPadding) }
+    var codeExternalMargin: CGFloat { scaled(CodeBlockLayout.externalMargin) }
+    var codeContentLineSpacing: CGFloat { scaled(CodeBlockLayout.contentLineSpacing) }
+    var codeHorizontalInset: CGFloat { scaled(CodeBlockLayout.horizontalInset) }
+    var codeLanguageChipHeight: CGFloat { scaled(CodeBlockLayout.languageChipHeight) }
+    var codeLanguageChipHorizontalPadding: CGFloat {
+        scaled(CodeBlockLayout.languageChipHorizontalPadding)
+    }
+    var codeLanguageChipTrailingPadding: CGFloat {
+        scaled(CodeBlockLayout.languageChipTrailingPadding)
+    }
+    var codeLanguageLabelFont: NSFont {
+        .monospacedSystemFont(ofSize: scaled(9.5), weight: .semibold)
+    }
+
+    var tableHorizontalPadding: CGFloat { scaled(MarkdownTableCellRenderer.horizontalPadding) }
+    var tableVerticalPadding: CGFloat { scaled(MarkdownTableCellRenderer.verticalPadding) }
+    var tableMinimumRowHeight: CGFloat { scaled(MarkdownTableCellRenderer.minimumRowHeight) }
+
+    var quoteIndent: CGFloat { scaled(18) }
+    var codeTextIndent: CGFloat { scaled(18) }
+    var imageVerticalPadding: CGFloat { scaled(12) }
+    var imageAutomaticMaximumHeight: CGFloat { scaled(360) }
+    var imageMinimumWidth: CGFloat { scaled(80) }
+    var imageCaretGap: CGFloat { scaled(4) }
+}
+
 private struct TerminalEmptyLineLayoutMetrics: Equatable {
     var textIndent: CGFloat
     var spacingBefore: CGFloat
@@ -73,13 +151,19 @@ private enum MarkdownTableCellRenderer {
         cells: [String],
         isHeader: Bool,
         tableWidth: CGFloat,
-        palette: AppTheme.Palette
+        palette: AppTheme.Palette,
+        metrics: NoteLayoutMetrics
     ) -> CGFloat {
         let columnCount = max(1, cells.count)
         let columnWidth = tableWidth / CGFloat(columnCount)
-        let textWidth = max(1, columnWidth - horizontalPadding * 2)
+        let textWidth = max(1, columnWidth - metrics.tableHorizontalPadding * 2)
         let maximumTextHeight = cells.reduce(CGFloat.zero) { height, cell in
-            let text = attributedText(cell, isHeader: isHeader, palette: palette)
+            let text = attributedText(
+                cell,
+                isHeader: isHeader,
+                palette: palette,
+                metrics: metrics
+            )
             let bounds = text.boundingRect(
                 with: NSSize(width: textWidth, height: .greatestFiniteMagnitude),
                 options: [.usesLineFragmentOrigin, .usesFontLeading]
@@ -87,23 +171,24 @@ private enum MarkdownTableCellRenderer {
             return max(height, ceil(bounds.height))
         }
 
-        return max(minimumRowHeight, maximumTextHeight + verticalPadding * 2)
+        return max(
+            metrics.tableMinimumRowHeight,
+            maximumTextHeight + metrics.tableVerticalPadding * 2
+        )
     }
 
     static func attributedText(
         _ text: String,
         isHeader: Bool,
         palette: AppTheme.Palette,
+        metrics: NoteLayoutMetrics,
         searchHighlights: [TableSearchHighlight] = []
     ) -> NSAttributedString {
         let paragraphStyle = NSMutableParagraphStyle()
         paragraphStyle.lineBreakMode = .byCharWrapping
-        paragraphStyle.minimumLineHeight = 15
+        paragraphStyle.minimumLineHeight = metrics.scaled(15)
 
-        let baseFont = NSFont.systemFont(
-            ofSize: 12,
-            weight: isHeader ? .semibold : .regular
-        )
+        let baseFont = isHeader ? metrics.tableHeaderFont : metrics.tableBodyFont
         let attributed = NSMutableAttributedString(
             string: text,
             attributes: [
@@ -132,13 +217,13 @@ private enum MarkdownTableCellRenderer {
             case .heading:
                 attributed.addAttribute(
                     .font,
-                    value: NSFont.systemFont(ofSize: 12, weight: .bold),
+                    value: NSFont.systemFont(ofSize: metrics.scaled(12), weight: .bold),
                     range: span.contentRange
                 )
             case .bold:
                 attributed.addAttribute(
                     .font,
-                    value: NSFont.systemFont(ofSize: 12, weight: .bold),
+                    value: NSFont.systemFont(ofSize: metrics.scaled(12), weight: .bold),
                     range: span.contentRange
                 )
             case .italic:
@@ -147,7 +232,7 @@ private enum MarkdownTableCellRenderer {
             case .code:
                 attributed.addAttributes(
                     [
-                        .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular),
+                        .font: metrics.tableCodeFont,
                         .backgroundColor: palette.codeBackgroundNS
                     ],
                     range: span.contentRange
@@ -199,6 +284,7 @@ struct DailyNoteEditorView: View {
                 palette: palette,
                 language: appState.language,
                 dateKey: appState.currentDateKey,
+                noteZoom: appState.noteZoom,
                 findQuery: findController.query,
                 findMatches: findController.matches,
                 selectedFindMatchID: findController.selectedMatch?.id,
@@ -213,6 +299,9 @@ struct DailyNoteEditorView: View {
                 },
                 onUnhandledEscape: {
                     findController.handleEscapeIfPresented()
+                },
+                onNoteZoomChange: { zoom in
+                    appState.updateNoteZoom(zoom)
                 },
                 text: Binding(
                     get: {
@@ -253,6 +342,7 @@ private struct InlineTodoTextEditor: NSViewRepresentable {
     var palette: AppTheme.Palette
     var language: AppLanguage
     var dateKey: String
+    var noteZoom: Double
     var findQuery: String
     var findMatches: [CurrentNoteFindMatch]
     var selectedFindMatchID: String?
@@ -262,6 +352,7 @@ private struct InlineTodoTextEditor: NSViewRepresentable {
     var onGoToNote: () -> Void
     var onBackToToday: () -> Void
     var onUnhandledEscape: () -> Bool
+    var onNoteZoomChange: (Double) -> Void
     @Binding var text: String
 
     func makeCoordinator() -> Coordinator {
@@ -272,7 +363,8 @@ private struct InlineTodoTextEditor: NSViewRepresentable {
         let view = InlineTodoTextEditorContainer(
             palette: palette,
             language: language,
-            dateKey: dateKey
+            dateKey: dateKey,
+            noteZoom: noteZoom
         )
         view.onTextChange = { [coordinator = context.coordinator] newText in
             coordinator.text.wrappedValue = newText
@@ -281,6 +373,7 @@ private struct InlineTodoTextEditor: NSViewRepresentable {
         view.onGoToNote = onGoToNote
         view.onBackToToday = onBackToToday
         view.onUnhandledEscape = onUnhandledEscape
+        view.onNoteZoomChange = onNoteZoomChange
         view.setIsShowingToday(isShowingToday)
         view.setText(text)
         view.setFindMatches(
@@ -297,10 +390,12 @@ private struct InlineTodoTextEditor: NSViewRepresentable {
         nsView.setTheme(palette)
         nsView.setLanguage(language)
         nsView.setDateKey(dateKey)
+        nsView.setNoteZoom(noteZoom)
         nsView.onFindInNote = onFindInNote
         nsView.onGoToNote = onGoToNote
         nsView.onBackToToday = onBackToToday
         nsView.onUnhandledEscape = onUnhandledEscape
+        nsView.onNoteZoomChange = onNoteZoomChange
         nsView.setIsShowingToday(isShowingToday)
         nsView.setFindMatches(
             query: findQuery,
@@ -328,6 +423,10 @@ private struct InlineTodoTextEditor: NSViewRepresentable {
 }
 
 final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
+    private struct VisibleTextAnchor {
+        var characterLocation: Int
+        var verticalOffset: CGFloat
+    }
     private enum LineKind: Equatable {
         case normal
         case task(indentColumns: Int, isCompleted: Bool)
@@ -846,7 +945,7 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     private let imageInteractionView = MarkdownImageInteractionOverlayView()
     private let imageOverlayView = MarkdownImageOverlayView()
     private let slashPaletteView = SlashCommandPaletteView()
-    private let baseFont = NSFont.systemFont(ofSize: 14)
+    private var metrics: NoteLayoutMetrics
     private static let numberedListPrefixAttribute = NSAttributedString.Key(
         "PinadayNumberedListPrefix"
     )
@@ -880,12 +979,19 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     private var revealRequest: NoteRevealRequest?
     private var lastRevealedFindMatchID: String?
     private var lastHandledRevealRequestID: UUID?
+    private var pendingNoteZoom: CGFloat?
+    private var pinchStartScale: CGFloat?
+
+    private var baseFont: NSFont {
+        metrics.baseFont
+    }
 
     var onTextChange: ((String) -> Void)?
     var onFindInNote: (() -> Void)?
     var onGoToNote: (() -> Void)?
     var onBackToToday: (() -> Void)?
     var onUnhandledEscape: (() -> Bool)?
+    var onNoteZoomChange: ((Double) -> Void)?
 
     var text: String {
         markdownText()
@@ -899,11 +1005,13 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         frame frameRect: NSRect = .zero,
         palette: AppTheme.Palette = AppTheme.yellow,
         language: AppLanguage = .english,
-        dateKey: String = ""
+        dateKey: String = "",
+        noteZoom: Double = NoteZoom.standard
     ) {
         self.palette = palette
         self.language = language
         self.dateKey = dateKey
+        self.metrics = NoteLayoutMetrics(scale: CGFloat(noteZoom))
         super.init(frame: frameRect)
         configureViews()
     }
@@ -912,6 +1020,7 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         self.palette = AppTheme.yellow
         self.language = .english
         self.dateKey = ""
+        self.metrics = NoteLayoutMetrics(scale: CGFloat(NoteZoom.standard))
         super.init(coder: coder)
         configureViews()
     }
@@ -963,6 +1072,127 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             lastHandledRevealRequestID = nil
         }
         self.dateKey = dateKey
+    }
+
+    func setNoteZoom(_ noteZoom: Double) {
+        let scale = CGFloat(NoteZoom.clamped(noteZoom))
+        guard abs(scale - metrics.scale) > 0.0001 else {
+            return
+        }
+
+        if isComposingMarkedText {
+            pendingNoteZoom = scale
+            return
+        }
+
+        applyNoteZoom(scale)
+    }
+
+    private func applyNoteZoom(_ scale: CGFloat) {
+        let anchor = captureVisibleTextAnchor()
+        metrics = NoteLayoutMetrics(scale: scale)
+        pendingNoteZoom = nil
+        lastAppliedImageLayoutWidth = nil
+        lastAppliedTableLayoutWidth = nil
+
+        textView.font = baseFont
+        textView.defaultParagraphStyle = baseParagraphStyle()
+        textView.typingAttributes = baseAttributes()
+        scrollView.contentInsets = NSEdgeInsets(
+            top: 0,
+            left: 0,
+            bottom: lineHeight(),
+            right: 0
+        )
+        overlayView.metrics = metrics
+        imageOverlayView.metrics = metrics
+        imageInteractionView.metrics = metrics
+
+        applyDisplayAttributes()
+        invalidateEditorLayout()
+        restoreVisibleTextAnchor(anchor)
+        refreshOverlay()
+    }
+
+    private func invalidateEditorLayout() {
+        guard let layoutManager = textView.layoutManager,
+              let textContainer = textView.textContainer
+        else {
+            return
+        }
+
+        let fullRange = NSRange(location: 0, length: (textView.string as NSString).length)
+        if fullRange.length > 0 {
+            layoutManager.invalidateLayout(forCharacterRange: fullRange, actualCharacterRange: nil)
+        }
+        layoutManager.textContainerChangedGeometry(textContainer)
+        layoutManager.ensureLayout(for: textContainer)
+        textView.needsLayout = true
+        textView.layoutSubtreeIfNeeded()
+    }
+
+    private func captureVisibleTextAnchor() -> VisibleTextAnchor? {
+        guard let layoutManager = textView.layoutManager,
+              let textContainer = textView.textContainer,
+              layoutManager.numberOfGlyphs > 0
+        else {
+            return nil
+        }
+
+        layoutManager.ensureLayout(for: textContainer)
+        let visibleBounds = scrollView.contentView.bounds
+        let origin = textView.textContainerOrigin
+        let point = NSPoint(
+            x: max(0, visibleBounds.minX - origin.x + 1),
+            y: max(0, visibleBounds.minY - origin.y + 1)
+        )
+        let glyphIndex = min(
+            layoutManager.numberOfGlyphs - 1,
+            layoutManager.glyphIndex(for: point, in: textContainer)
+        )
+        let characterLocation = layoutManager.characterIndexForGlyph(at: glyphIndex)
+        let lineRect = layoutManager.lineFragmentRect(
+            forGlyphAt: glyphIndex,
+            effectiveRange: nil,
+            withoutAdditionalLayout: true
+        )
+        return VisibleTextAnchor(
+            characterLocation: characterLocation,
+            verticalOffset: visibleBounds.minY - (origin.y + lineRect.minY)
+        )
+    }
+
+    private func restoreVisibleTextAnchor(_ anchor: VisibleTextAnchor?) {
+        guard let anchor,
+              let layoutManager = textView.layoutManager,
+              let textContainer = textView.textContainer,
+              layoutManager.numberOfGlyphs > 0
+        else {
+            return
+        }
+
+        layoutManager.ensureLayout(for: textContainer)
+        let textLength = (textView.string as NSString).length
+        let characterLocation = min(max(0, anchor.characterLocation), max(0, textLength - 1))
+        let glyphIndex = min(
+            layoutManager.numberOfGlyphs - 1,
+            layoutManager.glyphIndexForCharacter(at: characterLocation)
+        )
+        let lineRect = layoutManager.lineFragmentRect(
+            forGlyphAt: glyphIndex,
+            effectiveRange: nil,
+            withoutAdditionalLayout: true
+        )
+        let clipView = scrollView.contentView
+        let proposedY = textView.textContainerOrigin.y + lineRect.minY + anchor.verticalOffset
+        let maximumY = max(0, textView.bounds.height - clipView.bounds.height)
+        clipView.scroll(
+            to: NSPoint(
+                x: clipView.bounds.minX,
+                y: min(maximumY, max(0, proposedY))
+            )
+        )
+        scrollView.reflectScrolledClipView(clipView)
     }
 
     func setIsShowingToday(_ isShowingToday: Bool) {
@@ -1075,6 +1305,10 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         if isComposingMarkedText {
             refreshOverlay()
             return
+        }
+
+        if let pendingNoteZoom {
+            applyNoteZoom(pendingNoteZoom)
         }
 
         if promoteTypedMarkdownTaskIfNeeded() {
@@ -1412,6 +1646,16 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             self?.onBackToToday?()
         }
 
+        overlayView.metrics = metrics
+        imageOverlayView.metrics = metrics
+        imageInteractionView.metrics = metrics
+
+        let magnificationGesture = NSMagnificationGestureRecognizer(
+            target: self,
+            action: #selector(handleNoteMagnification(_:))
+        )
+        scrollView.addGestureRecognizer(magnificationGesture)
+
         imageOverlayView.translatesAutoresizingMaskIntoConstraints = false
         imageInteractionView.translatesAutoresizingMaskIntoConstraints = false
         overlayView.translatesAutoresizingMaskIntoConstraints = false
@@ -1469,6 +1713,34 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             name: NSView.boundsDidChangeNotification,
             object: scrollView.contentView
         )
+    }
+
+    @objc private func handleNoteMagnification(_ gesture: NSMagnificationGestureRecognizer) {
+        switch gesture.state {
+        case .began:
+            pinchStartScale = metrics.scale
+
+        case .changed:
+            let startScale = pinchStartScale ?? metrics.scale
+            let rawScale = startScale * max(0.1, 1 + gesture.magnification)
+            let steppedScale = CGFloat(
+                NoteZoom.stepped(
+                    Double(rawScale),
+                    by: 0
+                )
+            )
+            guard abs(steppedScale - metrics.scale) > 0.0001 else {
+                return
+            }
+            applyNoteZoom(steppedScale)
+            onNoteZoomChange?(Double(steppedScale))
+
+        case .ended, .cancelled, .failed:
+            pinchStartScale = nil
+
+        default:
+            break
+        }
     }
 
     private func configureSlashCommands() {
@@ -4378,13 +4650,33 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     func imagePreviewSizeForTesting(
         imageSize: NSSize,
         availableWidth: CGFloat,
-        explicitWidth: CGFloat?
+        explicitWidth: CGFloat?,
+        contentScale: CGFloat = 1
     ) -> NSSize {
         Self.constrainedImagePreviewSize(
             imageSize: imageSize,
             maxWidth: availableWidth,
-            explicitWidth: explicitWidth
+            explicitWidth: explicitWidth,
+            contentScale: contentScale
         )
+    }
+
+    var noteZoomForTesting: CGFloat {
+        metrics.scale
+    }
+
+    var horizontalScrollOffsetForTesting: CGFloat {
+        scrollView.contentView.bounds.minX
+    }
+
+    var visibleCharacterLocationForTesting: Int? {
+        captureVisibleTextAnchor()?.characterLocation
+    }
+
+    func tableRowFramesForTesting() -> [NSRect] {
+        layoutSubtreeIfNeeded()
+        refreshOverlay()
+        return overlayView.tableRowFramesForTesting
     }
 #endif
 
@@ -4422,12 +4714,15 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
 
     private func resizeImage(_ item: MarkdownImageOverlayItem, from point: NSPoint) -> Bool {
         let startPoint = point
-        let startWidth = item.frame.width
-        let minWidth: CGFloat = 80
+        let startVisualWidth = item.frame.width
+        let minWidth = metrics.imageMinimumWidth
         let maxWidth = max(minWidth, textView.bounds.width - textView.textContainerInset.width * 2)
-        var currentWidth = startWidth
+        var currentVisualWidth = startVisualWidth
 
-        resizingImagePreview = (lineIndex: item.lineIndex, width: currentWidth)
+        resizingImagePreview = (
+            lineIndex: item.lineIndex,
+            width: currentVisualWidth / metrics.scale
+        )
         refreshEditor()
 
         while let nextEvent = window?.nextEvent(
@@ -4437,16 +4732,20 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             dequeue: true
         ) {
             let currentPoint = imageOverlayView.convert(nextEvent.locationInWindow, from: nil)
-            currentWidth = max(minWidth, min(maxWidth, startWidth + currentPoint.x - startPoint.x))
+            currentVisualWidth = max(
+                minWidth,
+                min(maxWidth, startVisualWidth + currentPoint.x - startPoint.x)
+            )
+            let logicalWidth = currentVisualWidth / metrics.scale
 
             if nextEvent.type == .leftMouseDragged {
-                resizingImagePreview = (lineIndex: item.lineIndex, width: currentWidth)
+                resizingImagePreview = (lineIndex: item.lineIndex, width: logicalWidth)
                 refreshEditor()
                 continue
             }
 
             resizingImagePreview = nil
-            updateImageWidth(currentWidth, lineIndex: item.lineIndex)
+            updateImageWidth(logicalWidth, lineIndex: item.lineIndex)
             return true
         }
 
@@ -5228,7 +5527,10 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             if let reference = imageReference(in: line.text),
                let image = image(for: reference) {
                 let previewSize = imagePreviewSize(for: image, reference: reference, lineIndex: line.index)
-                let imageY = textContainerOrigin.y + lineRect.minY - visibleBounds.origin.y + 6
+                let imageY = textContainerOrigin.y
+                    + lineRect.minY
+                    - visibleBounds.origin.y
+                    + metrics.scaled(6)
                 let imageFrame = NSRect(
                     x: max(0, textContainerOrigin.x - visibleBounds.origin.x),
                     y: imageY,
@@ -5268,14 +5570,20 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             switch lineKind {
             case .task(let indentColumns, let isCompleted):
                 let checkboxLeftX = taskCheckboxIndent(for: indentColumns)
-                let x = max(0, textContainerOrigin.x + checkboxLeftX - visibleBounds.origin.x - TodoLayout.checkboxDrawInset)
+                let x = max(
+                    0,
+                    textContainerOrigin.x
+                        + checkboxLeftX
+                        - visibleBounds.origin.x
+                        - metrics.checkboxDrawInset
+                )
                 checkboxItems.append(
                     TodoCheckboxOverlayItem(
                         frame: NSRect(
                             x: x,
-                            y: y - 3,
-                            width: TodoLayout.checkboxFrameWidth,
-                            height: TodoLayout.checkboxFrameHeight
+                            y: y - metrics.scaled(3),
+                            width: metrics.checkboxFrameWidth,
+                            height: metrics.checkboxFrameHeight
                         ),
                         isChecked: isCompleted,
                         lineIndex: line.index
@@ -5297,7 +5605,12 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
                 markerItems.append(
                     LineMarkerOverlayItem(
                         kind: .quote,
-                        frame: NSRect(x: max(0, textContainerOrigin.x - visibleBounds.origin.x), y: y - 1, width: 14, height: lineHeight())
+                        frame: NSRect(
+                            x: max(0, textContainerOrigin.x - visibleBounds.origin.x),
+                            y: y - metrics.scaled(1),
+                            width: metrics.scaled(14),
+                            height: lineHeight()
+                        )
                     )
                 )
 
@@ -5310,7 +5623,7 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
                         kind: .horizontalRule,
                         frame: NSRect(
                             x: max(0, textContainerOrigin.x - visibleBounds.origin.x),
-                            y: y - 1,
+                            y: y - metrics.scaled(1),
                             width: max(40, textView.bounds.width - textView.textContainerInset.width * 2),
                             height: lineHeight()
                         )
@@ -5328,7 +5641,7 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
                         ),
                         frame: NSRect(
                             x: max(0, textContainerOrigin.x - visibleBounds.origin.x),
-                            y: y - 1,
+                            y: y - metrics.scaled(1),
                             width: max(80, textView.bounds.width - textView.textContainerInset.width * 2),
                             height: max(lineHeight() + 1, lineRect.height)
                         )
@@ -5358,7 +5671,8 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
                                     cells: renderedTableRow.cells,
                                     isHeader: renderedTableRow.isHeader,
                                     tableWidth: renderedTableWidth,
-                                    palette: palette
+                                    palette: palette,
+                                    metrics: metrics
                                 )
                             )
                         )
@@ -5385,9 +5699,9 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         let x: CGFloat
         switch edge {
         case .leading:
-            x = imageFrame.minX - 4
+            x = imageFrame.minX - metrics.imageCaretGap
         case .trailing:
-            x = imageFrame.maxX + 4
+            x = imageFrame.maxX + metrics.imageCaretGap
         }
 
         return MarkdownImageCaretItem(
@@ -5407,11 +5721,17 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         y: CGFloat
     ) -> NSRect {
         let leftX = taskCheckboxIndent(for: indentColumns)
-        let x = max(0, textContainerOrigin.x + leftX - visibleBounds.origin.x - TodoLayout.checkboxDrawInset)
+        let x = max(
+            0,
+            textContainerOrigin.x
+                + leftX
+                - visibleBounds.origin.x
+                - metrics.checkboxDrawInset
+        )
         return NSRect(
             x: x,
-            y: y - 1,
-            width: TodoLayout.checkboxFrameWidth,
+            y: y - metrics.scaled(1),
+            width: metrics.checkboxFrameWidth,
             height: lineHeight()
         )
     }
@@ -5476,7 +5796,7 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
                 case .code:
                     textStorage.addAttributes(
                         [
-                            .font: NSFont.monospacedSystemFont(ofSize: baseFont.pointSize - 1, weight: .regular),
+                            .font: metrics.codeFont,
                             .backgroundColor: codeBackground
                         ],
                         range: span.contentRange
@@ -5521,7 +5841,7 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
                prefixRange.length > 0 {
                 textStorage.addAttributes(
                     [
-                        .font: NSFont.systemFont(ofSize: 12, weight: .semibold),
+                        .font: metrics.numberedPrefixFont,
                         .foregroundColor: palette.textNS.withAlphaComponent(0.7),
                         Self.numberedListPrefixAttribute: true
                     ],
@@ -5568,7 +5888,7 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
                line.contentRange.length > 0 {
                 textStorage.addAttributes(
                     [
-                        .font: NSFont.monospacedSystemFont(ofSize: baseFont.pointSize - 1, weight: .regular),
+                        .font: metrics.codeFont,
                         .foregroundColor: palette.textNS
                     ],
                     range: line.contentRange
@@ -5581,8 +5901,8 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
                 textStorage.addAttributes(
                     [
                         .font: isHeader
-                            ? NSFont.monospacedSystemFont(ofSize: baseFont.pointSize - 1, weight: .semibold)
-                            : NSFont.monospacedSystemFont(ofSize: baseFont.pointSize - 1, weight: .regular),
+                            ? metrics.codeBoldFont
+                            : metrics.codeFont,
                         .backgroundColor: palette.codeBackgroundNS.withAlphaComponent(isHeader ? 0.58 : 0.32)
                     ],
                     range: line.contentRange
@@ -5675,7 +5995,7 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             textStorage.addAttributes(
                 [
                     .foregroundColor: highlightColor,
-                    .font: NSFont.monospacedSystemFont(ofSize: baseFont.pointSize - 1, weight: .semibold)
+                    .font: metrics.codeBoldFont
                 ],
                 range: NSRange(location: range.location + match.range.location, length: match.range.length)
             )
@@ -5733,16 +6053,16 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             applyTableTabStops(to: style, columnCount: columnCount)
         }
         let minimumLineHeight = kind.isCodeBlock
-            ? lineHeight() + CodeBlockLayout.contentLineSpacing
+            ? lineHeight() + metrics.codeContentLineSpacing
             : lineHeight()
         style.minimumLineHeight = max(minimumLineHeight, imagePreviewLineHeight(for: line))
         if kind.isCodeBlock {
             let boundary = codeBlockBoundary(at: line.index)
             style.paragraphSpacingBefore = boundary.isFirst
-                ? CodeBlockLayout.verticalPadding + CodeBlockLayout.externalMargin
+                ? metrics.codeVerticalPadding + metrics.codeExternalMargin
                 : 0
             style.paragraphSpacing = boundary.isLast
-                ? CodeBlockLayout.verticalPadding + CodeBlockLayout.externalMargin
+                ? metrics.codeVerticalPadding + metrics.codeExternalMargin
                 : 0
         }
         style.lineBreakMode = .byWordWrapping
@@ -5764,7 +6084,7 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             applyTableTabStops(to: style, columnCount: columnCount)
         }
         style.minimumLineHeight = kind.isCodeBlock
-            ? lineHeight() + CodeBlockLayout.contentLineSpacing
+            ? lineHeight() + metrics.codeContentLineSpacing
             : lineHeight()
         style.lineBreakMode = .byWordWrapping
         return style
@@ -5814,7 +6134,7 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         style.firstLineHeadIndent = markerIndent
         style.headIndent = contentIndent
         style.tabStops = [NSTextTab(textAlignment: .left, location: contentIndent)]
-        style.defaultTabInterval = TodoLayout.levelIndent
+        style.defaultTabInterval = metrics.listLevelIndent
     }
 
     private func collapsedTableSyntaxParagraphStyle() -> NSParagraphStyle {
@@ -5835,7 +6155,8 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             cells: row.cells,
             isHeader: row.isHeader,
             tableWidth: renderedTableWidth,
-            palette: palette
+            palette: palette,
+            metrics: metrics
         )
         style.minimumLineHeight = height
         style.maximumLineHeight = height
@@ -5889,11 +6210,11 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     private func headingSize(for level: Int) -> CGFloat {
         switch level {
         case 1:
-            return 21
+            return metrics.scaled(21)
         case 2:
-            return 18
+            return metrics.scaled(18)
         default:
-            return 16
+            return metrics.scaled(16)
         }
     }
 
@@ -5945,15 +6266,15 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
     }
 
     private func lineHeight() -> CGFloat {
-        ceil(baseFont.ascender - baseFont.descender + baseFont.leading)
+        metrics.baseLineHeight
     }
 
     private func taskCheckboxIndent(for indentColumns: Int) -> CGFloat {
-        CGFloat(indentColumns) / TodoLayout.markdownIndentColumnsPerLevel * TodoLayout.levelIndent
+        CGFloat(indentColumns) / TodoLayout.markdownIndentColumnsPerLevel * metrics.listLevelIndent
     }
 
     private func taskTextIndent(for indentColumns: Int) -> CGFloat {
-        taskCheckboxIndent(for: indentColumns) + TodoLayout.taskTextOffset
+        taskCheckboxIndent(for: indentColumns) + metrics.taskTextOffset
     }
 
     private func listLevel(for indentColumns: Int) -> Int {
@@ -5971,9 +6292,9 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
              .continuation(let indentColumns):
             return taskTextIndent(for: indentColumns)
         case .quote:
-            return 18
+            return metrics.quoteIndent
         case .codeBlock:
-            return 18
+            return metrics.codeTextIndent
         case .tableRow:
             return 0
         }
@@ -6007,21 +6328,23 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         reference: MarkdownImageReference,
         lineIndex: Int
     ) -> NSSize {
-        let maxWidth = max(120, textView.bounds.width - textView.textContainerInset.width * 2)
+        let maxWidth = max(metrics.scaled(120), textView.bounds.width - textView.textContainerInset.width * 2)
         let explicitWidth = resizingImagePreview?.lineIndex == lineIndex
             ? resizingImagePreview?.width
             : reference.width
         return Self.constrainedImagePreviewSize(
             imageSize: image.size,
             maxWidth: maxWidth,
-            explicitWidth: explicitWidth
+            explicitWidth: explicitWidth,
+            contentScale: metrics.scale
         )
     }
 
     private static func constrainedImagePreviewSize(
         imageSize: NSSize,
         maxWidth: CGFloat,
-        explicitWidth: CGFloat?
+        explicitWidth: CGFloat?,
+        contentScale: CGFloat = 1
     ) -> NSSize {
         guard imageSize.width > 0, imageSize.height > 0 else {
             return NSSize(width: maxWidth, height: 180)
@@ -6029,13 +6352,18 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
 
         let scale: CGFloat
         if let explicitWidth {
-            let targetWidth = max(80, min(explicitWidth, maxWidth))
+            let targetWidth = max(80 * contentScale, min(explicitWidth * contentScale, maxWidth))
             scale = targetWidth / imageSize.width
         } else {
-            let automaticMaximumHeight: CGFloat = 360
-            scale = min(
+            let automaticMaximumHeight: CGFloat = 360 * contentScale
+            let baselineScale = min(
                 1,
+                maxWidth / max(contentScale, 0.01) / imageSize.width,
+                360 / imageSize.height
+            )
+            scale = min(
                 maxWidth / imageSize.width,
+                baselineScale * contentScale,
                 automaticMaximumHeight / imageSize.height
             )
         }
@@ -6053,7 +6381,8 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             return lineHeight()
         }
 
-        return imagePreviewSize(for: image, reference: reference, lineIndex: line.index).height + 12
+        return imagePreviewSize(for: image, reference: reference, lineIndex: line.index).height
+            + metrics.imageVerticalPadding
     }
 
     private func kind(at index: Int) -> LineKind {
@@ -6412,23 +6741,23 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
 
         let minY = textContainerOrigin.y
             + firstRect.minY
-            - CodeBlockLayout.verticalPadding
+            - metrics.codeVerticalPadding
             - visibleBounds.origin.y
         let maxY = textContainerOrigin.y
             + lastRect.maxY
-            + CodeBlockLayout.verticalPadding
+            + metrics.codeVerticalPadding
             - visibleBounds.origin.y
         return NSRect(
             x: max(
                 0,
                 textContainerOrigin.x
                     - visibleBounds.origin.x
-                    + CodeBlockLayout.horizontalInset
+                    + metrics.codeHorizontalInset
             ),
             y: minY,
             width: max(80, textView.bounds.width - textView.textContainerInset.width * 2 - 2),
             height: max(
-                lineHeight() + CodeBlockLayout.verticalPadding * 2,
+                lineHeight() + metrics.codeVerticalPadding * 2,
                 maxY - minY
             )
         )
@@ -7821,24 +8150,24 @@ private struct LineMarkerOverlayItem {
     var kind: Kind
     var frame: NSRect
 
-    var codeLanguageTarget: CodeLanguageOverlayTarget? {
+    func codeLanguageTarget(metrics: NoteLayoutMetrics) -> CodeLanguageOverlayTarget? {
         guard case .codeBlock(let language, let displayName, let lineRange) = kind else {
             return nil
         }
 
         let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.monospacedSystemFont(ofSize: 9.5, weight: .semibold)
+            .font: metrics.codeLanguageLabelFont
         ]
         let size = (displayName as NSString).size(withAttributes: attributes)
         return CodeLanguageOverlayTarget(
             frame: NSRect(
                 x: frame.maxX
                     - size.width
-                    - CodeBlockLayout.languageChipHorizontalPadding * 2
-                    - CodeBlockLayout.languageChipTrailingPadding,
-                y: frame.minY + CodeBlockLayout.verticalPadding,
-                width: size.width + CodeBlockLayout.languageChipHorizontalPadding * 2,
-                height: CodeBlockLayout.languageChipHeight
+                    - metrics.codeLanguageChipHorizontalPadding * 2
+                    - metrics.codeLanguageChipTrailingPadding,
+                y: frame.minY + metrics.codeVerticalPadding,
+                width: size.width + metrics.codeLanguageChipHorizontalPadding * 2,
+                height: metrics.codeLanguageChipHeight
             ),
             lineRange: lineRange,
             language: language
@@ -7884,12 +8213,12 @@ private struct MarkdownImageOverlayItem {
     var lineIndex: Int
     var isSelected: Bool
 
-    var resizeHandleRect: NSRect {
+    func resizeHandleRect(metrics: NoteLayoutMetrics) -> NSRect {
         NSRect(
-            x: frame.maxX - 8,
-            y: frame.midY - 15,
-            width: 16,
-            height: 30
+            x: frame.maxX - metrics.scaled(8),
+            y: frame.midY - metrics.scaled(15),
+            width: metrics.scaled(16),
+            height: metrics.scaled(30)
         )
     }
 }
@@ -7899,6 +8228,12 @@ private struct MarkdownImageCaretItem {
 }
 
 private final class MarkdownImageOverlayView: NSView {
+    var metrics = NoteLayoutMetrics(scale: CGFloat(NoteZoom.standard)) {
+        didSet {
+            needsDisplay = true
+        }
+    }
+
     var palette: AppTheme.Palette = AppTheme.yellow {
         didSet {
             needsDisplay = true
@@ -7935,11 +8270,15 @@ private final class MarkdownImageOverlayView: NSView {
     }
 
     private func drawImage(_ item: MarkdownImageOverlayItem) {
-        let borderPath = NSBezierPath(roundedRect: item.frame, xRadius: 6, yRadius: 6)
+        let borderPath = NSBezierPath(
+            roundedRect: item.frame,
+            xRadius: metrics.scaled(6),
+            yRadius: metrics.scaled(6)
+        )
         (item.isSelected ? palette.accentNS : palette.checkboxBorderNS)
             .withAlphaComponent(item.isSelected ? 0.78 : 0.35)
             .setStroke()
-        borderPath.lineWidth = item.isSelected ? 2 : 1
+        borderPath.lineWidth = item.isSelected ? metrics.scaled(2) : metrics.scaled(1)
         borderPath.stroke()
 
         if item.isSelected {
@@ -7948,32 +8287,50 @@ private final class MarkdownImageOverlayView: NSView {
     }
 
     private func drawCaret(_ item: MarkdownImageCaretItem) {
-        let path = NSBezierPath(roundedRect: item.frame, xRadius: 1, yRadius: 1)
+        let path = NSBezierPath(
+            roundedRect: item.frame,
+            xRadius: metrics.scaled(1),
+            yRadius: metrics.scaled(1)
+        )
         palette.accentNS.setFill()
         path.fill()
     }
 
     private func drawResizeHandle(for item: MarkdownImageOverlayItem) {
-        let rect = item.resizeHandleRect
+        let rect = item.resizeHandleRect(metrics: metrics)
         let visibleRect = NSRect(
-            x: rect.midX - 4,
-            y: rect.minY + 4,
-            width: 8,
-            height: rect.height - 8
+            x: rect.midX - metrics.scaled(4),
+            y: rect.minY + metrics.scaled(4),
+            width: metrics.scaled(8),
+            height: rect.height - metrics.scaled(8)
         )
-        let handlePath = NSBezierPath(roundedRect: visibleRect, xRadius: 4, yRadius: 4)
+        let handlePath = NSBezierPath(
+            roundedRect: visibleRect,
+            xRadius: metrics.scaled(4),
+            yRadius: metrics.scaled(4)
+        )
         NSColor.white.withAlphaComponent(0.92).setFill()
         handlePath.fill()
         palette.accentNS.withAlphaComponent(0.72).setStroke()
-        handlePath.lineWidth = 1
+        handlePath.lineWidth = metrics.scaled(1)
         handlePath.stroke()
 
         palette.accentNS.withAlphaComponent(0.5).setStroke()
-        for offset in [-1.5, 1.5] {
+        for offset in [-metrics.scaled(1.5), metrics.scaled(1.5)] {
             let linePath = NSBezierPath()
-            linePath.move(to: NSPoint(x: visibleRect.midX + offset, y: visibleRect.minY + 5))
-            linePath.line(to: NSPoint(x: visibleRect.midX + offset, y: visibleRect.maxY - 5))
-            linePath.lineWidth = 1
+            linePath.move(
+                to: NSPoint(
+                    x: visibleRect.midX + offset,
+                    y: visibleRect.minY + metrics.scaled(5)
+                )
+            )
+            linePath.line(
+                to: NSPoint(
+                    x: visibleRect.midX + offset,
+                    y: visibleRect.maxY - metrics.scaled(5)
+                )
+            )
+            linePath.lineWidth = metrics.scaled(1)
             linePath.stroke()
         }
     }
@@ -7988,6 +8345,11 @@ private final class MarkdownImageInteractionOverlayView: NSView {
     var onGoToNote: (() -> Void)?
     var onBackToToday: (() -> Void)?
     var isShowingToday = true
+    var metrics = NoteLayoutMetrics(scale: CGFloat(NoteZoom.standard)) {
+        didSet {
+            window?.invalidateCursorRects(for: self)
+        }
+    }
 
     private let analyzer = ImageAnalyzer()
     private var analysisCache: [String: ImageAnalysis] = [:]
@@ -8090,7 +8452,7 @@ private final class MarkdownImageInteractionOverlayView: NSView {
             return nil
         }
 
-        if item.isSelected, item.resizeHandleRect.contains(localPoint) {
+        if item.isSelected, item.resizeHandleRect(metrics: metrics).contains(localPoint) {
             return self
         }
 
@@ -8114,7 +8476,7 @@ private final class MarkdownImageInteractionOverlayView: NSView {
             return
         }
 
-        if item.isSelected, item.resizeHandleRect.contains(point) {
+        if item.isSelected, item.resizeHandleRect(metrics: metrics).contains(point) {
             onResizeImage?(item, event)
             return
         }
@@ -8262,7 +8624,7 @@ private final class MarkdownImageInteractionOverlayView: NSView {
             return nil
         }
 
-        if item.isSelected, item.resizeHandleRect.contains(point) {
+        if item.isSelected, item.resizeHandleRect(metrics: metrics).contains(point) {
             return .resizeLeftRight
         }
 
@@ -8282,7 +8644,7 @@ private final class MarkdownImageInteractionOverlayView: NSView {
     }
 
     func resizeHandleRects() -> [NSRect] {
-        items.filter(\.isSelected).map(\.resizeHandleRect)
+        items.filter(\.isSelected).map { $0.resizeHandleRect(metrics: metrics) }
     }
 
     override func resetCursorRects() {
@@ -8301,7 +8663,10 @@ private final class MarkdownImageInteractionOverlayView: NSView {
                 addCursorRect(convert(controlRect, from: imageView), cursor: .arrow)
             }
             if item.isSelected {
-                addCursorRect(item.resizeHandleRect, cursor: .resizeLeftRight)
+                addCursorRect(
+                    item.resizeHandleRect(metrics: metrics),
+                    cursor: .resizeLeftRight
+                )
             }
         }
     }
@@ -9175,6 +9540,12 @@ private final class LiveTextImageView: NSView, ImageAnalysisOverlayViewDelegate,
 private final class TodoCheckboxOverlayView: NSView {
     var onToggleCheckbox: ((Int) -> Void)?
     var onChooseCodeLanguage: ((Range<Int>, String?, NSRect) -> Void)?
+    var metrics = NoteLayoutMetrics(scale: CGFloat(NoteZoom.standard)) {
+        didSet {
+            needsDisplay = true
+            window?.invalidateCursorRects(for: self)
+        }
+    }
 
     var palette: AppTheme.Palette = AppTheme.yellow {
         didSet {
@@ -9194,8 +9565,19 @@ private final class TodoCheckboxOverlayView: NSView {
         }
     }
 
+    var tableRowFramesForTesting: [NSRect] {
+        markers.compactMap { marker in
+            if case .tableRow = marker.kind {
+                return marker.frame
+            }
+            return nil
+        }
+    }
+
     var codeLanguageTargetCenterForTesting: NSPoint? {
-        guard let target = markers.compactMap(\.codeLanguageTarget).first else {
+        guard let target = markers.compactMap({
+            $0.codeLanguageTarget(metrics: metrics)
+        }).first else {
             return nil
         }
         return NSPoint(x: target.frame.midX, y: target.frame.midY)
@@ -9244,8 +9626,8 @@ private final class TodoCheckboxOverlayView: NSView {
         for item in items {
             addCursorRect(clickTarget(for: item), cursor: .pointingHand)
         }
-        for marker in markers where marker.codeLanguageTarget != nil {
-            if let target = marker.codeLanguageTarget {
+        for marker in markers {
+            if let target = marker.codeLanguageTarget(metrics: metrics) {
                 addCursorRect(target.frame, cursor: .pointingHand)
             }
         }
@@ -9297,17 +9679,19 @@ private final class TodoCheckboxOverlayView: NSView {
     }
 
     private func clickTarget(for item: TodoCheckboxOverlayItem) -> NSRect {
-        item.frame.insetBy(dx: -2, dy: -2)
+        item.frame.insetBy(dx: -metrics.scaled(2), dy: -metrics.scaled(2))
     }
 
     private func codeLanguageTarget(at point: NSPoint) -> CodeLanguageOverlayTarget? {
-        markers.reversed().compactMap(\.codeLanguageTarget).first {
+        markers.reversed().compactMap {
+            $0.codeLanguageTarget(metrics: metrics)
+        }.first {
             $0.frame.contains(point)
         }
     }
 
     private func drawCheckbox(_ item: TodoCheckboxOverlayItem) {
-        let boxSize: CGFloat = 16
+        let boxSize = metrics.checkboxVisualSize
         let boxRect = NSRect(
             x: floor(item.frame.midX - boxSize / 2),
             y: floor(item.frame.midY - boxSize / 2),
@@ -9315,12 +9699,16 @@ private final class TodoCheckboxOverlayView: NSView {
             height: boxSize
         )
 
-        let boxPath = NSBezierPath(roundedRect: boxRect, xRadius: 3.5, yRadius: 3.5)
+        let boxPath = NSBezierPath(
+            roundedRect: boxRect,
+            xRadius: metrics.scaled(3.5),
+            yRadius: metrics.scaled(3.5)
+        )
         (item.isChecked ? palette.checkboxCheckedNS : palette.checkboxUncheckedNS).setFill()
         boxPath.fill()
 
         palette.checkboxBorderNS.setStroke()
-        boxPath.lineWidth = 1.5
+        boxPath.lineWidth = metrics.scaled(1.5)
         boxPath.stroke()
 
         guard item.isChecked else {
@@ -9328,11 +9716,26 @@ private final class TodoCheckboxOverlayView: NSView {
         }
 
         let checkPath = NSBezierPath()
-        checkPath.move(to: NSPoint(x: boxRect.minX + 4, y: boxRect.midY + 0.5))
-        checkPath.line(to: NSPoint(x: boxRect.minX + 7, y: boxRect.maxY - 4))
-        checkPath.line(to: NSPoint(x: boxRect.maxX - 3.5, y: boxRect.minY + 4))
+        checkPath.move(
+            to: NSPoint(
+                x: boxRect.minX + metrics.scaled(4),
+                y: boxRect.midY + metrics.scaled(0.5)
+            )
+        )
+        checkPath.line(
+            to: NSPoint(
+                x: boxRect.minX + metrics.scaled(7),
+                y: boxRect.maxY - metrics.scaled(4)
+            )
+        )
+        checkPath.line(
+            to: NSPoint(
+                x: boxRect.maxX - metrics.scaled(3.5),
+                y: boxRect.minY + metrics.scaled(4)
+            )
+        )
         palette.checkboxCheckmarkNS.setStroke()
-        checkPath.lineWidth = 2.2
+        checkPath.lineWidth = metrics.scaled(2.2)
         checkPath.lineCapStyle = .round
         checkPath.lineJoinStyle = .round
         checkPath.stroke()
@@ -9344,50 +9747,78 @@ private final class TodoCheckboxOverlayView: NSView {
             drawBullet(level: level, in: item.frame)
 
         case .quote:
-            let bar = NSRect(x: item.frame.minX + 5, y: item.frame.minY + 1, width: 3, height: item.frame.height - 2)
+            let bar = NSRect(
+                x: item.frame.minX + metrics.scaled(5),
+                y: item.frame.minY + metrics.scaled(1),
+                width: metrics.scaled(3),
+                height: item.frame.height - metrics.scaled(2)
+            )
             palette.accentNS.withAlphaComponent(0.45).setFill()
-            NSBezierPath(roundedRect: bar, xRadius: 1.5, yRadius: 1.5).fill()
+            NSBezierPath(
+                roundedRect: bar,
+                xRadius: metrics.scaled(1.5),
+                yRadius: metrics.scaled(1.5)
+            ).fill()
 
         case .codeBlock(_, let displayName, _):
-            let blockRect = item.frame.integral.insetBy(dx: 0.5, dy: 0.5)
-            let blockPath = NSBezierPath(roundedRect: blockRect, xRadius: 6, yRadius: 6)
+            let blockRect = item.frame.integral.insetBy(
+                dx: metrics.scaled(0.5),
+                dy: metrics.scaled(0.5)
+            )
+            let blockPath = NSBezierPath(
+                roundedRect: blockRect,
+                xRadius: metrics.scaled(6),
+                yRadius: metrics.scaled(6)
+            )
             palette.codeBackgroundNS.withAlphaComponent(palette.kind == .dark ? 0.34 : 0.24).setFill()
             blockPath.fill()
 
             palette.checkboxBorderNS.withAlphaComponent(palette.kind == .dark ? 0.34 : 0.28).setStroke()
-            blockPath.lineWidth = 1
+            blockPath.lineWidth = metrics.scaled(1)
             blockPath.stroke()
 
             let railRect = NSRect(
-                x: blockRect.minX + 4,
-                y: blockRect.minY + 5,
-                width: 3,
-                height: max(0, blockRect.height - 10)
+                x: blockRect.minX + metrics.scaled(4),
+                y: blockRect.minY + metrics.scaled(5),
+                width: metrics.scaled(3),
+                height: max(0, blockRect.height - metrics.scaled(10))
             )
             palette.accentNS.withAlphaComponent(0.65).setFill()
-            NSBezierPath(roundedRect: railRect, xRadius: 1.5, yRadius: 1.5).fill()
+            NSBezierPath(
+                roundedRect: railRect,
+                xRadius: metrics.scaled(1.5),
+                yRadius: metrics.scaled(1.5)
+            ).fill()
 
             let attributes = codeLanguageLabelAttributes
             let chipRect = codeLanguageChipRect(label: displayName, blockFrame: item.frame)
             palette.checkboxUncheckedNS.withAlphaComponent(palette.kind == .dark ? 0.3 : 0.65).setFill()
-            NSBezierPath(roundedRect: chipRect, xRadius: 4, yRadius: 4).fill()
+            NSBezierPath(
+                roundedRect: chipRect,
+                xRadius: metrics.scaled(4),
+                yRadius: metrics.scaled(4)
+            ).fill()
             (displayName as NSString).draw(
                 at: NSPoint(
-                    x: chipRect.minX + CodeBlockLayout.languageChipHorizontalPadding,
-                    y: chipRect.minY + 2.5
+                    x: chipRect.minX + metrics.codeLanguageChipHorizontalPadding,
+                    y: chipRect.minY + metrics.scaled(2.5)
                 ),
                 withAttributes: attributes
             )
 
         case .horizontalRule:
             let line = NSRect(
-                x: item.frame.minX + 2,
-                y: item.frame.midY - 0.75,
-                width: item.frame.width - 4,
-                height: 1.5
+                x: item.frame.minX + metrics.scaled(2),
+                y: item.frame.midY - metrics.scaled(0.75),
+                width: item.frame.width - metrics.scaled(4),
+                height: metrics.scaled(1.5)
             )
             palette.checkboxBorderNS.withAlphaComponent(0.55).setFill()
-            NSBezierPath(roundedRect: line, xRadius: 0.75, yRadius: 0.75).fill()
+            NSBezierPath(
+                roundedRect: line,
+                xRadius: metrics.scaled(0.75),
+                yRadius: metrics.scaled(0.75)
+            ).fill()
 
         case .tableRow(let isHeader, let cells, let rowIndex, let searchHighlights):
             let columnCount = max(1, cells.count)
@@ -9407,10 +9838,10 @@ private final class TodoCheckboxOverlayView: NSView {
                 path.stroke()
             }
 
-            let minX = rowRect.minX + 0.5
-            let maxX = rowRect.maxX - 0.5
-            let minY = rowRect.minY + 0.5
-            let maxY = rowRect.maxY - 0.5
+            let minX = rowRect.minX + metrics.scaled(0.5)
+            let maxX = rowRect.maxX - metrics.scaled(0.5)
+            let minY = rowRect.minY + metrics.scaled(0.5)
+            let maxY = rowRect.maxY - metrics.scaled(0.5)
             let columnWidth = rowRect.width / CGFloat(columnCount)
 
             strokeLine(from: NSPoint(x: minX, y: minY), to: NSPoint(x: minX, y: maxY))
@@ -9419,28 +9850,36 @@ private final class TodoCheckboxOverlayView: NSView {
                 strokeLine(from: NSPoint(x: minX, y: minY), to: NSPoint(x: maxX, y: minY))
             }
             if isHeader {
-                strokeLine(from: NSPoint(x: minX, y: maxY - 2), to: NSPoint(x: maxX, y: maxY - 2))
+                strokeLine(
+                    from: NSPoint(x: minX, y: maxY - metrics.scaled(2)),
+                    to: NSPoint(x: maxX, y: maxY - metrics.scaled(2))
+                )
             }
             strokeLine(from: NSPoint(x: minX, y: maxY), to: NSPoint(x: maxX, y: maxY))
 
             if columnCount > 1 {
                 for column in 1..<columnCount {
-                    let x = rowRect.minX + columnWidth * CGFloat(column) + 0.5
+                    let x = rowRect.minX
+                        + columnWidth * CGFloat(column)
+                        + metrics.scaled(0.5)
                     strokeLine(from: NSPoint(x: x, y: minY), to: NSPoint(x: x, y: maxY))
                 }
             }
 
             for (index, cell) in cells.enumerated() {
                 let cellRect = NSRect(
-                    x: rowRect.minX + CGFloat(index) * columnWidth + MarkdownTableCellRenderer.horizontalPadding,
-                    y: rowRect.minY + MarkdownTableCellRenderer.verticalPadding,
-                    width: max(0, columnWidth - MarkdownTableCellRenderer.horizontalPadding * 2),
-                    height: max(0, rowRect.height - MarkdownTableCellRenderer.verticalPadding * 2)
+                    x: rowRect.minX
+                        + CGFloat(index) * columnWidth
+                        + metrics.tableHorizontalPadding,
+                    y: rowRect.minY + metrics.tableVerticalPadding,
+                    width: max(0, columnWidth - metrics.tableHorizontalPadding * 2),
+                    height: max(0, rowRect.height - metrics.tableVerticalPadding * 2)
                 )
                 MarkdownTableCellRenderer.attributedText(
                     cell,
                     isHeader: isHeader,
                     palette: palette,
+                    metrics: metrics,
                     searchHighlights: searchHighlights.filter { $0.cellIndex == index }
                 ).draw(
                     with: cellRect,
@@ -9452,7 +9891,7 @@ private final class TodoCheckboxOverlayView: NSView {
 
     private var codeLanguageLabelAttributes: [NSAttributedString.Key: Any] {
         [
-            .font: NSFont.monospacedSystemFont(ofSize: 9.5, weight: .semibold),
+            .font: metrics.codeLanguageLabelFont,
             .foregroundColor: palette.secondaryTextNS.withAlphaComponent(0.95)
         ]
     }
@@ -9462,11 +9901,11 @@ private final class TodoCheckboxOverlayView: NSView {
         return NSRect(
             x: blockFrame.maxX
                 - size.width
-                - CodeBlockLayout.languageChipHorizontalPadding * 2
-                - CodeBlockLayout.languageChipTrailingPadding,
-            y: blockFrame.minY + CodeBlockLayout.verticalPadding,
-            width: size.width + CodeBlockLayout.languageChipHorizontalPadding * 2,
-            height: CodeBlockLayout.languageChipHeight
+                - metrics.codeLanguageChipHorizontalPadding * 2
+                - metrics.codeLanguageChipTrailingPadding,
+            y: blockFrame.minY + metrics.codeVerticalPadding,
+            width: size.width + metrics.codeLanguageChipHorizontalPadding * 2,
+            height: metrics.codeLanguageChipHeight
         )
     }
 
@@ -9475,33 +9914,40 @@ private final class TodoCheckboxOverlayView: NSView {
 
         switch level % 3 {
         case 1:
+            let radius = metrics.scaled(3)
             let circleRect = NSRect(
-                x: floor(rect.midX - 3),
-                y: floor(rect.midY - 3),
-                width: 6,
-                height: 6
+                x: floor(rect.midX - radius),
+                y: floor(rect.midY - radius),
+                width: radius * 2,
+                height: radius * 2
             )
             color.setStroke()
             let path = NSBezierPath(ovalIn: circleRect)
-            path.lineWidth = 1.25
+            path.lineWidth = metrics.scaled(1.25)
             path.stroke()
 
         case 2:
+            let size = metrics.scaled(5)
             let squareRect = NSRect(
-                x: floor(rect.midX - 2.5),
-                y: floor(rect.midY - 2.5),
-                width: 5,
-                height: 5
+                x: floor(rect.midX - size / 2),
+                y: floor(rect.midY - size / 2),
+                width: size,
+                height: size
             )
             color.setFill()
-            NSBezierPath(roundedRect: squareRect, xRadius: 0.6, yRadius: 0.6).fill()
+            NSBezierPath(
+                roundedRect: squareRect,
+                xRadius: metrics.scaled(0.6),
+                yRadius: metrics.scaled(0.6)
+            ).fill()
 
         default:
+            let size = metrics.scaled(4.6)
             let dotRect = NSRect(
-                x: floor(rect.midX - 2.3),
-                y: floor(rect.midY - 2.3),
-                width: 4.6,
-                height: 4.6
+                x: floor(rect.midX - size / 2),
+                y: floor(rect.midY - size / 2),
+                width: size,
+                height: size
             )
             color.setFill()
             NSBezierPath(ovalIn: dotRect).fill()

@@ -43,6 +43,25 @@ struct DailyStickyApp: App {
                 .keyboardShortcut("w", modifiers: [.command])
             }
 
+            CommandGroup(after: .toolbar) {
+                Divider()
+
+                Button(localized("Zoom In")) {
+                    appDelegate.zoomNoteIn()
+                }
+                .keyboardShortcut("=", modifiers: [.command])
+
+                Button(localized("Zoom Out")) {
+                    appDelegate.zoomNoteOut()
+                }
+                .keyboardShortcut("-", modifiers: [.command])
+
+                Button(localized("Actual Size")) {
+                    appDelegate.resetNoteZoom()
+                }
+                .keyboardShortcut("0", modifiers: [.command])
+            }
+
             CommandGroup(replacing: .help) {
                 Button(localized("Pinaday Quick Start")) {
                     appDelegate.showQuickStartGuide()
@@ -607,6 +626,16 @@ struct DailyStickyHelpView: View {
                 }
 
                 HelpSection(title: "Editing") {
+                    HelpLine(
+                        "Zoom note content",
+                        detail: "Use Cmd-Plus and Cmd-Minus, or pinch on a trackpad. The note reflows without changing the window or header.",
+                        syntax: "Cmd-+ / Cmd--"
+                    )
+                    HelpLine(
+                        "Actual Size",
+                        detail: "Press Cmd-0 to return note content to 100%.",
+                        syntax: "Cmd-0"
+                    )
                     HelpLine(
                         "Undo and redo",
                         detail: "Use Cmd-Z to undo and Shift-Cmd-Z to redo."

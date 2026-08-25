@@ -1,5 +1,21 @@
 import Foundation
 
+enum NoteZoom {
+    static let minimum = 0.6
+    static let maximum = 2.0
+    static let step = 0.1
+    static let standard = 1.0
+
+    static func clamped(_ value: Double) -> Double {
+        min(maximum, max(minimum, value))
+    }
+
+    static func stepped(_ value: Double, by delta: Double) -> Double {
+        let steppedValue = ((value + delta) * 10).rounded() / 10
+        return clamped(steppedValue)
+    }
+}
+
 enum AppThemeKind: String, Codable, CaseIterable, Identifiable {
     case yellow
     case light
@@ -31,6 +47,7 @@ struct AppSettings: Codable, Equatable {
     var hasSeenWelcome: Bool
     var storageMode: StorageMode
     var hasChosenStorageMode: Bool
+    var noteZoom: Double
 
     init(
         lastOpenedDateKey: String,
@@ -41,7 +58,8 @@ struct AppSettings: Codable, Equatable {
         noteOpacity: Double = 1.0,
         hasSeenWelcome: Bool = false,
         storageMode: StorageMode = .localOnly,
-        hasChosenStorageMode: Bool = false
+        hasChosenStorageMode: Bool = false,
+        noteZoom: Double = NoteZoom.standard
     ) {
         self.lastOpenedDateKey = lastOpenedDateKey
         self.isPinned = isPinned
@@ -52,6 +70,7 @@ struct AppSettings: Codable, Equatable {
         self.hasSeenWelcome = hasSeenWelcome
         self.storageMode = storageMode
         self.hasChosenStorageMode = hasChosenStorageMode
+        self.noteZoom = NoteZoom.clamped(noteZoom)
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -64,6 +83,7 @@ struct AppSettings: Codable, Equatable {
         case hasSeenWelcome
         case storageMode
         case hasChosenStorageMode
+        case noteZoom
     }
 
     init(from decoder: Decoder) throws {
@@ -79,6 +99,9 @@ struct AppSettings: Codable, Equatable {
         hasSeenWelcome = try container.decodeIfPresent(Bool.self, forKey: .hasSeenWelcome) ?? false
         storageMode = try container.decodeIfPresent(StorageMode.self, forKey: .storageMode) ?? .localOnly
         hasChosenStorageMode = try container.decodeIfPresent(Bool.self, forKey: .hasChosenStorageMode) ?? false
+        noteZoom = NoteZoom.clamped(
+            try container.decodeIfPresent(Double.self, forKey: .noteZoom) ?? NoteZoom.standard
+        )
     }
 
     static func clampedOpacity(_ opacity: Double) -> Double {

@@ -4,6 +4,81 @@ import XCTest
 @testable import Pinaday
 
 final class ThemeConsistencyTests: XCTestCase {
+    func testNoteZoomPolicyClampsAndStepsPredictably() {
+        XCTAssertEqual(NoteZoom.clamped(0.2), 0.6)
+        XCTAssertEqual(NoteZoom.clamped(2.4), 2.0)
+        XCTAssertEqual(NoteZoom.stepped(1.0, by: NoteZoom.step), 1.1)
+        XCTAssertEqual(NoteZoom.stepped(1.0, by: -NoteZoom.step), 0.9)
+        XCTAssertEqual(NoteZoom.stepped(1.96, by: NoteZoom.step), 2.0)
+    }
+
+    func testLegacySettingsDecodeWithStandardNoteZoom() throws {
+        let json = """
+        {
+          "lastOpenedDateKey": "2026-08-24",
+          "isPinned": false,
+          "windowFrame": null,
+          "theme": "yellow",
+          "language": "english",
+          "launchAtLogin": false,
+          "noteOpacity": 1,
+          "hasSeenWelcome": true,
+          "storageMode": "localOnly",
+          "hasChosenStorageMode": true
+        }
+        """
+
+        let settings = try JSONDecoder().decode(
+            AppSettings.self,
+            from: Data(json.utf8)
+        )
+
+        XCTAssertEqual(settings.noteZoom, NoteZoom.standard)
+    }
+
+    func testNoteZoomShortcutsUseConventionalMacBindingsOnly() {
+        XCTAssertEqual(
+            NoteZoomShortcut.command(
+                charactersIgnoringModifiers: "=",
+                modifierFlags: .command
+            ),
+            .zoomIn
+        )
+        XCTAssertEqual(
+            NoteZoomShortcut.command(
+                charactersIgnoringModifiers: "+",
+                modifierFlags: [.command, .shift]
+            ),
+            .zoomIn
+        )
+        XCTAssertEqual(
+            NoteZoomShortcut.command(
+                charactersIgnoringModifiers: "-",
+                modifierFlags: .command
+            ),
+            .zoomOut
+        )
+        XCTAssertEqual(
+            NoteZoomShortcut.command(
+                charactersIgnoringModifiers: "0",
+                modifierFlags: .command
+            ),
+            .actualSize
+        )
+        XCTAssertNil(
+            NoteZoomShortcut.command(
+                charactersIgnoringModifiers: "-",
+                modifierFlags: []
+            )
+        )
+        XCTAssertNil(
+            NoteZoomShortcut.command(
+                charactersIgnoringModifiers: "0",
+                modifierFlags: [.command, .shift]
+            )
+        )
+    }
+
     func testAppControlsDoNotInheritTheSystemAccentColor() throws {
         let sources = try applicationSources()
 

@@ -116,6 +116,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         currentNoteFindController?.present()
     }
 
+    @objc func zoomNoteIn() {
+        appState?.zoomNoteIn()
+    }
+
+    @objc func zoomNoteOut() {
+        appState?.zoomNoteOut()
+    }
+
+    @objc func resetNoteZoom() {
+        appState?.resetNoteZoom()
+    }
+
     func toggleNoteSearch(anchorScreenRect: NSRect?) {
         if appState?.isNoteSearchPresented == true {
             dismissNoteSearch()
@@ -134,6 +146,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func installSearchShortcutMonitor() {
         searchShortcutMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            switch NoteZoomShortcut.command(for: event) {
+            case .zoomIn:
+                self?.zoomNoteIn()
+                return nil
+            case .zoomOut:
+                self?.zoomNoteOut()
+                return nil
+            case .actualSize:
+                self?.resetNoteZoom()
+                return nil
+            case nil:
+                break
+            }
             if CurrentNoteFindShortcut.matches(event) {
                 self?.showCurrentNoteFind()
                 return nil
@@ -368,6 +393,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         window.setFrameOrigin(NSPoint(x: x, y: y))
+    }
+}
+
+enum NoteZoomCommand: Equatable {
+    case zoomIn
+    case zoomOut
+    case actualSize
+}
+
+enum NoteZoomShortcut {
+    static func command(for event: NSEvent) -> NoteZoomCommand? {
+        command(
+            charactersIgnoringModifiers: event.charactersIgnoringModifiers,
+            modifierFlags: event.modifierFlags
+        )
+    }
+
+    static func command(
+        charactersIgnoringModifiers: String?,
+        modifierFlags: NSEvent.ModifierFlags
+    ) -> NoteZoomCommand? {
+        let modifiers = modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let characters = charactersIgnoringModifiers?.lowercased()
+
+        if characters == "=" || characters == "+" {
+            guard modifiers == .command || modifiers == [.command, .shift] else {
+                return nil
+            }
+            return .zoomIn
+        }
+
+        guard modifiers == .command else {
+            return nil
+        }
+        switch characters {
+        case "-": return .zoomOut
+        case "0": return .actualSize
+        default: return nil
+        }
     }
 }
 

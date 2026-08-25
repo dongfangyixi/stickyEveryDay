@@ -1096,6 +1096,152 @@ final class CheckboxInteractionTests: XCTestCase {
         )
     }
 
+    func testSemanticZoomReflowsTextWithoutChangingMarkdownOrScrollingSideways() {
+        let (editor, window) = makeEditor()
+        window.setContentSize(NSSize(width: 240, height: 320))
+        let markdown = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen"
+        editor.setText(markdown)
+
+        editor.setNoteZoom(0.6)
+        window.contentView?.layoutSubtreeIfNeeded()
+        editor.layoutSubtreeIfNeeded()
+        let smallFragmentCount = editor.visualFragmentCountForTesting(lineIndex: 0)
+
+        editor.setNoteZoom(2.0)
+        window.contentView?.layoutSubtreeIfNeeded()
+        editor.layoutSubtreeIfNeeded()
+        let largeFragmentCount = editor.visualFragmentCountForTesting(lineIndex: 0)
+
+        XCTAssertEqual(editor.noteZoomForTesting, 2.0)
+        XCTAssertGreaterThan(largeFragmentCount, smallFragmentCount)
+        XCTAssertEqual(editor.text, markdown)
+        XCTAssertEqual(editor.horizontalScrollOffsetForTesting, 0, accuracy: 0.5)
+    }
+
+    func testSemanticZoomKeepsCodeAndCheckboxInteractionsReachable() throws {
+        let (editor, window) = makeEditor()
+        window.setContentSize(NSSize(width: 300, height: 420))
+        editor.setText(
+            """
+            ```swift
+            let answer = 42
+            ```
+            - [ ] task
+            """
+        )
+        let originalMarkdown = editor.text
+        var codeHeights: [CGFloat] = []
+
+        for scale in [0.6, 1.0, 2.0] {
+            editor.setNoteZoom(scale)
+            window.contentView?.layoutSubtreeIfNeeded()
+            editor.layoutSubtreeIfNeeded()
+
+            let frame = try XCTUnwrap(editor.codeBlockFramesForTesting().first)
+            codeHeights.append(frame.height)
+            XCTAssertTrue(editor.codeLanguageControlRespondsToHitTestingForTesting())
+            XCTAssertTrue(editor.checkboxUsesPointingHandCursorForTesting(lineIndex: 1))
+            XCTAssertTrue(
+                editor.checkboxRespondsToClickForTesting(lineIndex: 1),
+                editor.checkboxDiagnosticsForTesting(lineIndex: 1)
+            )
+            XCTAssertTrue(editor.mouseCanPlaceCaretWithoutScrollingForTesting(
+                lineIndex: 0,
+                utf16Offset: 3
+            ))
+        }
+
+        XCTAssertLessThan(codeHeights[0], codeHeights[1])
+        XCTAssertLessThan(codeHeights[1], codeHeights[2])
+        XCTAssertEqual(
+            editor.text.replacingOccurrences(of: "- [x]", with: "- [ ]"),
+            originalMarkdown
+        )
+    }
+
+    func testSemanticZoomScalesRenderedTableRowsAndPreservesSource() throws {
+        let (editor, window) = makeEditor()
+        window.setContentSize(NSSize(width: 300, height: 420))
+        let markdown = """
+        | Name | Details |
+        | --- | --- |
+        | Pinaday | a long table value that wraps inside its cell |
+        after
+        """
+        editor.setText(markdown)
+        let afterRange = try XCTUnwrap(editor.contentRangeForTesting(lineIndex: 3))
+        editor.selectRangeForTesting(
+            NSRange(location: NSMaxRange(afterRange), length: 0)
+        )
+
+        editor.setNoteZoom(0.6)
+        window.contentView?.layoutSubtreeIfNeeded()
+        editor.layoutSubtreeIfNeeded()
+        let smallRows = editor.tableRowFramesForTesting()
+
+        editor.setNoteZoom(2.0)
+        window.contentView?.layoutSubtreeIfNeeded()
+        editor.layoutSubtreeIfNeeded()
+        let largeRows = editor.tableRowFramesForTesting()
+
+        XCTAssertEqual(smallRows.count, 2)
+        XCTAssertEqual(largeRows.count, 2)
+        XCTAssertGreaterThan(largeRows[1].height, smallRows[1].height)
+        XCTAssertEqual(editor.text, markdown)
+    }
+
+    func testSemanticZoomScalesImagePreviewButKeepsViewportClamp() {
+        let (editor, _) = makeEditor()
+        let imageSize = NSSize(width: 1200, height: 600)
+
+        XCTAssertEqual(
+            editor.imagePreviewSizeForTesting(
+                imageSize: imageSize,
+                availableWidth: 1000,
+                explicitWidth: 300,
+                contentScale: 0.6
+            ),
+            NSSize(width: 180, height: 90)
+        )
+        XCTAssertEqual(
+            editor.imagePreviewSizeForTesting(
+                imageSize: imageSize,
+                availableWidth: 1000,
+                explicitWidth: 300,
+                contentScale: 2.0
+            ),
+            NSSize(width: 600, height: 300)
+        )
+        XCTAssertEqual(
+            editor.imagePreviewSizeForTesting(
+                imageSize: imageSize,
+                availableWidth: 500,
+                explicitWidth: 300,
+                contentScale: 2.0
+            ),
+            NSSize(width: 500, height: 250)
+        )
+    }
+
+    func testSemanticZoomPreservesTheVisibleReadingRegion() throws {
+        let (editor, window) = makeEditor()
+        window.setContentSize(NSSize(width: 260, height: 220))
+        editor.setText((1...120).map { "line \($0) with enough text to wrap" }.joined(separator: "\n"))
+        window.contentView?.layoutSubtreeIfNeeded()
+        editor.layoutSubtreeIfNeeded()
+        editor.scrollToBottomForTesting()
+        let before = try XCTUnwrap(editor.visibleCharacterLocationForTesting)
+
+        editor.setNoteZoom(2.0)
+        window.contentView?.layoutSubtreeIfNeeded()
+        editor.layoutSubtreeIfNeeded()
+        let after = try XCTUnwrap(editor.visibleCharacterLocationForTesting)
+
+        XCTAssertGreaterThan(before, 1_000)
+        XCTAssertGreaterThan(after, before - 100)
+        XCTAssertEqual(editor.horizontalScrollOffsetForTesting, 0, accuracy: 0.5)
+    }
+
     func testDeletingMiddleNumberedItemRenumbersFollowingItems() {
         let (editor, _) = makeEditor()
         editor.setText(

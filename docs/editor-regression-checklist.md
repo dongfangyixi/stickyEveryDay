@@ -54,6 +54,19 @@ Run the automated test suite before every editor release. Then verify this check
 - Edit and render tables; verify wrapping, inline Markdown, row borders, caret access, and selection.
 - Verify Find in Note and Go To across plain text, lists, tables, code, and OCR text, including scrolling to every match.
 
+## Semantic Note Zoom
+
+- Verify `Cmd-Plus`, `Cmd-Minus`, `Cmd-0`, and trackpad pinch at 60%, 100%, and 200%.
+- Confirm zoom changes note content only. The window frame, header controls, and editor width must not scale.
+- Confirm wrapped plain text reflows vertically without adding a horizontal scrollbar.
+- Verify task checkboxes, bullets, numbered prefixes, quote rails, code blocks, language chips, dividers, table cells, image previews, image resize handles, OCR regions, selection highlights, and carets all scale together.
+- At every zoom level, click checkboxes, code-language chips, list text, and lines before and after structured blocks; confirm hit targets and cursors remain aligned.
+- Resize an image while zoomed, return to 100%, and confirm its saved logical width has not been multiplied by the note zoom.
+- Zoom a long scrolled note and confirm the same reading region remains visible instead of jumping to the top.
+- Change zoom while composing with an IME and confirm composition is preserved and the pending zoom applies afterward.
+- Restart the app and confirm the saved zoom level is restored. Open legacy settings without a zoom value and confirm they default to 100%.
+- Confirm the source Markdown and stored note data are unchanged by zooming.
+
 ## Window And Themes
 
 - Resize from every edge and corner at minimum and large window sizes; confirm the window never moves or trembles.

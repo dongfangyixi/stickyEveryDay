@@ -66,6 +66,18 @@ CloudKit responses are asynchronous snapshots, never replacements for the live e
 - The local JSON store remains the offline source of truth and must be saved before any cloud request is scheduled.
 - Run the complete `CloudSyncTests` suite after changing persistence, autosave, app lifecycle, or CloudKit behavior.
 
+## Semantic Note Zoom
+
+Note zoom is editor layout, not viewport magnification.
+
+- Do not enable `NSScrollView` magnification or scale the whole editor view. That also scales the viewport, encourages horizontal scrolling, and makes AppKit hit testing harder to reason about.
+- `NoteLayoutMetrics` is the single source of truth for zoomed fonts, line heights, structured markers, code blocks, tables, images, overlays, carets, cursor regions, and hit targets.
+- Persist image widths in logical 100% units. Convert between logical and displayed widths only at the image interaction boundary.
+- Preserve a logical visible text anchor while relaying out so a zoom action does not jump the reader to another part of the note.
+- Defer zoom while marked text is active. Never interrupt Chinese, Japanese, Korean, or other IME composition.
+- Zoom must not modify Markdown source, editor width, window geometry, or header geometry.
+- Run the semantic zoom tests plus the full editor regression suite after changing any text or overlay geometry.
+
 ## Definition Of Done
 
 For UI behavior fixes:

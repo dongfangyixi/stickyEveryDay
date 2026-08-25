@@ -23,6 +23,7 @@ final class AppState: ObservableObject {
     @Published private(set) var hasSeenWelcome: Bool
     @Published private(set) var storageMode: StorageMode
     @Published private(set) var hasChosenStorageMode: Bool
+    @Published private(set) var noteZoom: Double
     @Published private(set) var cloudSyncStatus: CloudSyncStatus
     @Published private(set) var isNoteSearchPresented = false
     @Published private(set) var searchReturnDateKey: String?
@@ -128,6 +129,7 @@ final class AppState: ObservableObject {
         self.hasSeenWelcome = loadedData.settings.hasSeenWelcome
         self.storageMode = loadedData.settings.storageMode
         self.hasChosenStorageMode = loadedData.settings.hasChosenStorageMode
+        self.noteZoom = loadedData.settings.noteZoom
         self.cloudSyncStatus = loadedData.settings.storageMode == .iCloud ? .checkingAccount : .localOnly
         self.lastErrorMessage = loadWarning
         self.dataStore = dataStore
@@ -293,6 +295,29 @@ final class AppState: ObservableObject {
         }
     }
 
+    func updateNoteZoom(_ noteZoom: Double) {
+        let clampedZoom = NoteZoom.clamped(noteZoom)
+        guard abs(clampedZoom - self.noteZoom) > 0.0001 else {
+            return
+        }
+
+        mutateData(saveMode: .debounced) { data in
+            data.settings.noteZoom = clampedZoom
+        }
+    }
+
+    func zoomNoteIn() {
+        updateNoteZoom(NoteZoom.stepped(noteZoom, by: NoteZoom.step))
+    }
+
+    func zoomNoteOut() {
+        updateNoteZoom(NoteZoom.stepped(noteZoom, by: -NoteZoom.step))
+    }
+
+    func resetNoteZoom() {
+        updateNoteZoom(NoteZoom.standard)
+    }
+
     func markWelcomeSeen() {
         guard !data.settings.hasSeenWelcome else {
             return
@@ -373,6 +398,7 @@ final class AppState: ObservableObject {
         hasSeenWelcome = data.settings.hasSeenWelcome
         storageMode = data.settings.storageMode
         hasChosenStorageMode = data.settings.hasChosenStorageMode
+        noteZoom = data.settings.noteZoom
 
         switch saveMode {
         case .debounced:
