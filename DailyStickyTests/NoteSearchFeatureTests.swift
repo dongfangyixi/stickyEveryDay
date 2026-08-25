@@ -47,6 +47,23 @@ final class NoteSearchFeatureTests: XCTestCase {
         XCTAssertEqual(controller.selectedResult?.dateKey, "2026-08-02")
     }
 
+    func testIndexRefreshPreservesTheSelectedResultByDate() {
+        let controller = NoteSearchController()
+        var pages = [
+            "2026-08-01": page("2026-08-01", "shared result"),
+            "2026-08-02": page("2026-08-02", "shared result")
+        ]
+        controller.rebuildIndex(with: pages)
+        controller.query = "shared"
+        controller.moveSelection(by: 1)
+        XCTAssertEqual(controller.selectedResult?.dateKey, "2026-08-01")
+
+        pages["2026-08-03"] = page("2026-08-03", "shared result")
+        controller.rebuildIndex(with: pages)
+
+        XCTAssertEqual(controller.selectedResult?.dateKey, "2026-08-01")
+    }
+
     func testClearingQueryRemovesResultsAndKeepsIndexReady() {
         let controller = NoteSearchController()
         controller.rebuildIndex(with: [
@@ -228,6 +245,43 @@ final class NoteSearchFeatureTests: XCTestCase {
         XCTAssertTrue(appState.isNoteSearchPresented)
 
         controller.dismiss()
+    }
+
+    func testSearchPanelRestoresItsQueryResultsAndSelectionAfterDismissal() {
+        let data = AppData(
+            schemaVersion: 1,
+            pages: [
+                "2026-08-09": page("2026-08-09", "shared result"),
+                "2026-08-10": page("2026-08-10", "shared result")
+            ],
+            settings: AppSettings(
+                lastOpenedDateKey: "2026-08-10",
+                isPinned: false,
+                windowFrame: nil
+            )
+        )
+        let appState = AppState(
+            dataStore: InMemoryAppDataStore(data: data),
+            dateKeyService: DateKeyService()
+        )
+        let searchController = NoteSearchController()
+        let panelController = NoteSearchPanelController(
+            appState: appState,
+            searchController: searchController
+        )
+
+        panelController.show(relativeTo: nil, noteWindowFrame: nil)
+        searchController.query = "shared"
+        searchController.moveSelection(by: 1)
+        let selectedDateKey = searchController.selectedResult?.dateKey
+        panelController.dismiss()
+
+        panelController.show(relativeTo: nil, noteWindowFrame: nil)
+
+        XCTAssertEqual(searchController.query, "shared")
+        XCTAssertEqual(searchController.results.count, 2)
+        XCTAssertEqual(searchController.selectedResult?.dateKey, selectedDateKey)
+        panelController.dismiss()
     }
 
     func testOpeningSearchResultCanReturnToOriginalFutureWorkingDate() {

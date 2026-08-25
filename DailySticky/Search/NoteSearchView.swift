@@ -6,7 +6,7 @@ final class NoteSearchPanelController: NSObject, NSWindowDelegate {
     private static let panelSize = NSSize(width: 360, height: 351)
 
     private let appState: AppState
-    private let searchController = NoteSearchController()
+    private let searchController: NoteSearchController
     private let ocrSearchIndexer: OCRSearchIndexer
     private var panel: NoteSearchPanel?
     private var anchorScreenRect: NSRect?
@@ -18,9 +18,11 @@ final class NoteSearchPanelController: NSObject, NSWindowDelegate {
 
     init(
         appState: AppState,
+        searchController: NoteSearchController? = nil,
         ocrSearchIndexer: OCRSearchIndexer = OCRSearchIndexer()
     ) {
         self.appState = appState
+        self.searchController = searchController ?? NoteSearchController()
         self.ocrSearchIndexer = ocrSearchIndexer
         super.init()
         installDismissalObservers()
@@ -51,7 +53,6 @@ final class NoteSearchPanelController: NSObject, NSWindowDelegate {
 
         let panel = panel ?? makePanel()
         self.panel = panel
-        searchController.reset()
         let pages = appState.data.pages
         if cachedOCRSourcePages == pages, let cachedOCRDocuments {
             searchController.rebuildIndex(

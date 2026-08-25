@@ -50,6 +50,7 @@ final class NoteSearchController: ObservableObject {
         with documents: [NoteSearchDocument],
         locale: Locale? = nil
     ) {
+        let selectedResultID = selectedResult?.id
         if let locale {
             self.locale = locale
         }
@@ -61,23 +62,18 @@ final class NoteSearchController: ObservableObject {
             dateEngine.synchronize(with: documents, locale: self.locale)
             indexedLocaleIdentifier = localeIdentifier
         }
-        refreshResults()
+        refreshResults(preferredResultID: selectedResultID)
     }
 
     func updateLocale(_ locale: Locale) {
+        let selectedResultID = selectedResult?.id
         self.locale = locale
         dateEngine.rebuild(with: indexedDocuments, locale: locale)
-        refreshResults()
+        refreshResults(preferredResultID: selectedResultID)
     }
 
     func setIndexingImageText(_ isIndexing: Bool) {
         isIndexingImageText = isIndexing
-    }
-
-    func reset() {
-        query = ""
-        results = []
-        selectedResultIndex = 0
     }
 
     func clearQuery() {
@@ -136,7 +132,7 @@ final class NoteSearchController: ObservableObject {
         selectedResultIndex = index
     }
 
-    private func refreshResults() {
+    private func refreshResults(preferredResultID: String? = nil) {
         let contentResults = engine.search(query, limit: 80)
         let dateResults = dateEngine.search(query, limit: 80)
         var resultByDateKey = Dictionary(
@@ -153,6 +149,11 @@ final class NoteSearchController: ObservableObject {
         }
         .prefix(40)
         .map { $0 }
-        selectedResultIndex = min(selectedResultIndex, max(0, results.count - 1))
+        if let preferredResultID,
+           let preservedIndex = results.firstIndex(where: { $0.id == preferredResultID }) {
+            selectedResultIndex = preservedIndex
+        } else {
+            selectedResultIndex = min(selectedResultIndex, max(0, results.count - 1))
+        }
     }
 }
