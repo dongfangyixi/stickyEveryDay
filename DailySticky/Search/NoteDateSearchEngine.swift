@@ -10,6 +10,8 @@ struct NoteDateSearchEngine {
     private var indexedDates: [IndexedDate] = []
     private var monthEngine = NoteSearchEngine()
     private var snippetByDateKey: [String: String] = [:]
+    private var indexedDateKeys: Set<String> = []
+    private var localeIdentifier: String?
 
     mutating func rebuild(
         with documents: [NoteSearchDocument],
@@ -39,12 +41,32 @@ struct NoteDateSearchEngine {
                 numericComponents: Set([components.year, components.month, components.day])
             )
         }
+        indexedDateKeys = Set(documents.map(\.dateKey))
+        localeIdentifier = locale.identifier
+    }
+
+    mutating func synchronize(
+        with documents: [NoteSearchDocument],
+        locale: Locale
+    ) {
+        let dateKeys = Set(documents.map(\.dateKey))
+        guard dateKeys == indexedDateKeys, locale.identifier == localeIdentifier else {
+            rebuild(with: documents, locale: locale)
+            return
+        }
+        snippetByDateKey = Dictionary(
+            uniqueKeysWithValues: documents.map { document in
+                (document.dateKey, Self.previewText(for: document))
+            }
+        )
     }
 
     mutating func releaseIndex() {
         indexedDates = []
         monthEngine.rebuild(with: [])
         snippetByDateKey = [:]
+        indexedDateKeys = []
+        localeIdentifier = nil
     }
 
     func search(_ query: String, limit: Int = 40) -> [NoteSearchResult] {
@@ -166,11 +188,15 @@ struct NoteDateSearchEngine {
     }
 
     private static func previewText(for document: NoteSearchDocument) -> String {
-        let notePreview = document.text
-            .components(separatedBy: .newlines)
-            .lazy
-            .map(SearchTextNormalizer.displayText)
-            .first { !$0.isEmpty }
+        var notePreview: String?
+        document.text.enumerateLines { line, stop in
+            let displayText = SearchTextNormalizer.displayText(from: line)
+            guard !displayText.isEmpty else {
+                return
+            }
+            notePreview = displayText
+            stop = true
+        }
         if let notePreview {
             return notePreview
         }

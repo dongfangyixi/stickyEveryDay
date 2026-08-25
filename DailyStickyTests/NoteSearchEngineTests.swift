@@ -92,6 +92,45 @@ final class NoteSearchEngineTests: XCTestCase {
         XCTAssertEqual(results.first?.dateKey, "2026-08-20")
     }
 
+    func testSynchronizeReusesUnchangedDocumentsAndUpdatesOnlyChangedDates() {
+        let first = document("2026-08-01", "alpha note")
+        let second = document("2026-08-02", "beta note")
+        var engine = NoteSearchEngine(documents: [first, second])
+
+        XCTAssertEqual(
+            engine.synchronize(with: [first, second]),
+            NoteSearchIndexUpdate(insertedOrUpdatedCount: 0, removedCount: 0)
+        )
+
+        let changedSecond = document("2026-08-02", "gamma note")
+        XCTAssertEqual(
+            engine.synchronize(with: [changedSecond]),
+            NoteSearchIndexUpdate(insertedOrUpdatedCount: 1, removedCount: 1)
+        )
+        XCTAssertTrue(engine.search("alpha").isEmpty)
+        XCTAssertEqual(engine.search("gamma").map(\.dateKey), ["2026-08-02"])
+    }
+
+    func testDateSearchSynchronizeReusesAliasesAndRefreshesThePreview() {
+        let locale = Locale(identifier: "en_US")
+        var engine = NoteDateSearchEngine()
+        engine.rebuild(
+            with: [document("2026-08-12", "# Original preview\nolder details")],
+            locale: locale
+        )
+
+        XCTAssertEqual(engine.search("Aug 12 2026").first?.snippet, "Original preview")
+
+        engine.synchronize(
+            with: [document("2026-08-12", "\n**Updated preview**\nnew details")],
+            locale: locale
+        )
+
+        let result = engine.search("Aug 12 2026").first
+        XCTAssertEqual(result?.dateKey, "2026-08-12")
+        XCTAssertEqual(result?.snippet, "Updated preview")
+    }
+
     func testSearchAcrossTenThousandNotesStaysLightweight() {
         let documents = (0..<10_000).map { index in
             document(
@@ -129,6 +168,69 @@ final class NoteSearchEngineTests: XCTestCase {
 
         XCTAssertEqual(results.first?.dateKey, "2027-12-30")
         XCTAssertLessThan(searchDuration, 1.25, "CJK search took \(searchDuration) seconds")
+    }
+
+    func testLargeMixedCorpusSearchAndReopenStayInteractive() {
+        let documents = benchmarkDocuments()
+        let buildStart = CFAbsoluteTimeGetCurrent()
+        var engine = NoteSearchEngine(documents: documents)
+        var dateEngine = NoteDateSearchEngine()
+        dateEngine.rebuild(with: documents, locale: Locale(identifier: "en_US"))
+        let buildDuration = CFAbsoluteTimeGetCurrent() - buildStart
+        let queries = ["project", "proejct", "旅行计画", "ocrneedle", "Aug 12 2025"]
+
+        var durations: [String: TimeInterval] = [:]
+        for query in queries {
+            let searchStart = CFAbsoluteTimeGetCurrent()
+            _ = engine.search(query, limit: 40)
+            _ = dateEngine.search(query, limit: 40)
+            durations[query] = CFAbsoluteTimeGetCurrent() - searchStart
+        }
+
+        let reopenStart = CFAbsoluteTimeGetCurrent()
+        let update = engine.synchronize(with: documents)
+        let reopenDuration = CFAbsoluteTimeGetCurrent() - reopenStart
+
+        XCTAssertEqual(update, NoteSearchIndexUpdate(insertedOrUpdatedCount: 0, removedCount: 0))
+        XCTAssertEqual(engine.search("ocrneedle").first?.dateKey, "2026-12-31")
+        XCTAssertEqual(dateEngine.search("Aug 12 2025").first?.dateKey, "2025-08-12")
+        XCTAssertLessThan(buildDuration, 1.0, "Mixed index build took \(buildDuration) seconds")
+        XCTAssertLessThan(reopenDuration, 0.1, "Unchanged reopen took \(reopenDuration) seconds")
+        for (query, duration) in durations {
+            XCTAssertLessThan(duration, 0.35, "Search for \(query) took \(duration) seconds")
+        }
+
+    }
+
+    private func benchmarkDocuments() -> [NoteSearchDocument] {
+        var documents = (0..<1_000).map { index in
+            document(
+                String(
+                    format: "%04d-%02d-%02d",
+                    2024 + index / 336,
+                    (index % 336) / 28 + 1,
+                    index % 28 + 1
+                ),
+                "Daily project planning note \(index) with deployment status, follow up tasks, and review notes."
+            )
+        }
+        let article = (0..<600).map { line in
+            "Section \(line) discusses project architecture, searchable records, deployment, and performance."
+        }.joined(separator: "\n")
+        documents.append(
+            NoteSearchDocument(
+                dateKey: "2026-12-31",
+                text: article + "\n准备旅行计划并预订酒店",
+                updatedAt: .distantPast,
+                supplementalLines: [
+                    NoteSearchSupplementalLine(
+                        text: "OCR screenshot contains ocrneedle and billing details",
+                        source: .image(attachmentPath: "attachments/benchmark.png")
+                    )
+                ]
+            )
+        )
+        return documents
     }
 
     private func document(_ dateKey: String, _ text: String) -> NoteSearchDocument {

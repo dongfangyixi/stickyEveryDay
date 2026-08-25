@@ -17,6 +17,7 @@ final class NoteSearchController: ObservableObject {
     private var dateEngine = NoteDateSearchEngine()
     private var indexedDocuments: [NoteSearchDocument] = []
     private var locale = Locale(identifier: "en_US")
+    private var indexedLocaleIdentifier: String?
 
     var indexedDocumentCount: Int {
         engine.documentCount
@@ -52,9 +53,14 @@ final class NoteSearchController: ObservableObject {
         if let locale {
             self.locale = locale
         }
+        let localeIdentifier = self.locale.identifier
+        let localeChanged = indexedLocaleIdentifier != localeIdentifier
+        let update = engine.synchronize(with: documents)
         indexedDocuments = documents
-        engine.rebuild(with: documents)
-        dateEngine.rebuild(with: documents, locale: self.locale)
+        if update.hasChanges || localeChanged {
+            dateEngine.synchronize(with: documents, locale: self.locale)
+            indexedLocaleIdentifier = localeIdentifier
+        }
         refreshResults()
     }
 
@@ -91,6 +97,7 @@ final class NoteSearchController: ObservableObject {
         engine.rebuild(with: [NoteSearchDocument]())
         dateEngine.releaseIndex()
         indexedDocuments = []
+        indexedLocaleIdentifier = nil
         results = []
         selectedResultIndex = 0
         isIndexingImageText = false

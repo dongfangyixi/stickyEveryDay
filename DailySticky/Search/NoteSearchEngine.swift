@@ -80,12 +80,37 @@ struct NoteSearchResult: Identifiable, Equatable {
     }
 }
 
+struct NoteSearchIndexUpdate: Equatable {
+    let insertedOrUpdatedCount: Int
+    let removedCount: Int
+
+    var hasChanges: Bool {
+        insertedOrUpdatedCount > 0 || removedCount > 0
+    }
+}
+
 struct NoteSearchEngine {
+    private struct IndexedToken {
+        let text: String
+        let containsCJK: Bool
+
+        init(_ text: String) {
+            self.text = text
+            self.containsCJK = SearchTextNormalizer.containsCJK(text)
+        }
+    }
+
+    private struct TokenPair: Hashable {
+        let query: String
+        let candidate: String
+    }
+
     private struct IndexedLine {
         let rawText: String
         let displayText: String
         let normalizedText: String
-        let tokens: [String]
+        let tokens: [IndexedToken]
+        let containsCJK: Bool
         let source: NoteSearchLineSource
         let location: NoteSearchMatchLocation?
     }
@@ -94,14 +119,17 @@ struct NoteSearchEngine {
         let dateKey: String
         let updatedAt: Date
         let normalizedText: String
-        let tokens: [String]
+        let tokens: [IndexedToken]
+        let containsCJK: Bool
+        let cjkCandidateText: String?
         let lines: [IndexedLine]
     }
 
-    private var documents: [IndexedDocument] = []
+    private var sourceDocumentsByDateKey: [String: NoteSearchDocument] = [:]
+    private var documentsByDateKey: [String: IndexedDocument] = [:]
 
     var documentCount: Int {
-        documents.count
+        documentsByDateKey.count
     }
 
     init(documents: [NoteSearchDocument] = []) {
@@ -115,13 +143,55 @@ struct NoteSearchEngine {
     }
 
     mutating func rebuild(with documents: [NoteSearchDocument]) {
-        self.documents = documents.compactMap(Self.indexDocument)
+        sourceDocumentsByDateKey = [:]
+        documentsByDateKey = [:]
+        for document in documents {
+            sourceDocumentsByDateKey[document.dateKey] = document
+            if let indexedDocument = Self.indexDocument(document) {
+                documentsByDateKey[document.dateKey] = indexedDocument
+            }
+        }
     }
 
     mutating func rebuild(with pages: [String: DayPage]) {
         rebuild(with: pages.values.map {
             NoteSearchDocument(dateKey: $0.dateKey, text: $0.noteText, updatedAt: $0.updatedAt)
         })
+    }
+
+    @discardableResult
+    mutating func synchronize(with documents: [NoteSearchDocument]) -> NoteSearchIndexUpdate {
+        var incomingByDateKey: [String: NoteSearchDocument] = [:]
+        for document in documents {
+            incomingByDateKey[document.dateKey] = document
+        }
+
+        let removedDateKeys = sourceDocumentsByDateKey.keys.filter {
+            incomingByDateKey[$0] == nil
+        }
+        for dateKey in removedDateKeys {
+            sourceDocumentsByDateKey.removeValue(forKey: dateKey)
+            documentsByDateKey.removeValue(forKey: dateKey)
+        }
+
+        var insertedOrUpdatedCount = 0
+        for (dateKey, document) in incomingByDateKey {
+            guard sourceDocumentsByDateKey[dateKey] != document else {
+                continue
+            }
+            sourceDocumentsByDateKey[dateKey] = document
+            if let indexedDocument = Self.indexDocument(document) {
+                documentsByDateKey[dateKey] = indexedDocument
+            } else {
+                documentsByDateKey.removeValue(forKey: dateKey)
+            }
+            insertedOrUpdatedCount += 1
+        }
+
+        return NoteSearchIndexUpdate(
+            insertedOrUpdatedCount: insertedOrUpdatedCount,
+            removedCount: removedDateKeys.count
+        )
     }
 
     func search(_ query: String, limit: Int = 40) -> [NoteSearchResult] {
@@ -131,32 +201,52 @@ struct NoteSearchEngine {
             return []
         }
 
-        let queryTokens = SearchTextNormalizer.tokens(in: normalizedQuery)
+        let queryTokens = SearchTextNormalizer.tokens(in: normalizedQuery).map(IndexedToken.init)
         guard !queryTokens.isEmpty else {
             return []
         }
 
-        return documents.compactMap { document -> NoteSearchResult? in
+        var similarityCache: [TokenPair: Double] = [:]
+        var results: [NoteSearchResult] = []
+        for document in documentsByDateKey.values {
             guard let documentScore = Self.matchScore(
                 query: normalizedQuery,
                 queryTokens: queryTokens,
                 candidate: document.normalizedText,
-                candidateTokens: document.tokens
+                candidateTokens: document.tokens,
+                candidateContainsCJK: document.containsCJK,
+                cjkCandidate: document.cjkCandidateText,
+                similarityCache: &similarityCache
             ) else {
-                return nil
+                continue
             }
 
-            let rankedLines = document.lines.compactMap { line -> (IndexedLine, Double)? in
-                guard let score = Self.partialMatchScore(
-                    query: normalizedQuery,
-                    queryTokens: queryTokens,
-                    candidate: line.normalizedText,
-                    candidateTokens: line.tokens
-                ) else {
+            let exactLines = document.lines.compactMap { line -> (IndexedLine, Double)? in
+                guard let range = line.normalizedText.range(of: normalizedQuery) else {
                     return nil
                 }
-                return (line, score)
+                let position = line.normalizedText.distance(
+                    from: line.normalizedText.startIndex,
+                    to: range.lowerBound
+                )
+                return (line, min(1, 0.91 + 0.08 / Double(position + 1)))
             }
+            let rankedLines = exactLines.isEmpty
+                ? document.lines.compactMap { line -> (IndexedLine, Double)? in
+                    guard let score = Self.partialMatchScore(
+                        query: normalizedQuery,
+                        queryTokens: queryTokens,
+                        candidate: line.normalizedText,
+                        candidateTokens: line.tokens,
+                        candidateContainsCJK: line.containsCJK,
+                        cjkCandidate: line.containsCJK ? line.normalizedText : nil,
+                        similarityCache: &similarityCache
+                    ) else {
+                        return nil
+                    }
+                    return (line, score)
+                }
+                : exactLines
 
             let bestLine = rankedLines.max { $0.1 < $1.1 }?.0 ?? document.lines[0]
             let matchingLineCount = max(
@@ -164,16 +254,16 @@ struct NoteSearchEngine {
                 rankedLines.filter { $0.1 >= Self.minimumAcceptedScore }.count
             )
 
-            return NoteSearchResult(
+            results.append(NoteSearchResult(
                 dateKey: document.dateKey,
                 snippet: bestLine.displayText,
                 score: documentScore,
                 matchingLineCount: matchingLineCount,
                 source: bestLine.source,
                 matchLocation: Self.matchLocation(for: trimmedQuery, in: bestLine)
-            )
+            ))
         }
-        .sorted {
+        return results.sorted {
             if abs($0.score - $1.score) > 0.0001 {
                 return $0.score > $1.score
             }
@@ -193,12 +283,14 @@ struct NoteSearchEngine {
                 guard !normalizedText.isEmpty else {
                     return nil
                 }
+                let tokens = indexedTokens(in: normalizedText)
 
                 return IndexedLine(
                     rawText: rawLine,
                     displayText: displayText,
                     normalizedText: normalizedText,
-                    tokens: SearchTextNormalizer.tokens(in: normalizedText),
+                    tokens: tokens,
+                    containsCJK: tokens.contains(where: \.containsCJK),
                     source: .note,
                     location: .note(range: lineRange)
                 )
@@ -210,12 +302,14 @@ struct NoteSearchEngine {
             guard !normalizedText.isEmpty else {
                 return nil
             }
+            let tokens = indexedTokens(in: normalizedText)
 
             return IndexedLine(
                 rawText: line.text,
                 displayText: displayText,
                 normalizedText: normalizedText,
-                tokens: SearchTextNormalizer.tokens(in: normalizedText),
+                tokens: tokens,
+                containsCJK: tokens.contains(where: \.containsCJK),
                 source: line.source,
                 location: line.location
             )
@@ -227,13 +321,36 @@ struct NoteSearchEngine {
         }
 
         let normalizedText = lines.map(\.normalizedText).joined(separator: " ")
+        let cjkCandidateText = lines
+            .filter(\.containsCJK)
+            .map(\.normalizedText)
+            .joined(separator: " ")
         return IndexedDocument(
             dateKey: document.dateKey,
             updatedAt: document.updatedAt,
             normalizedText: normalizedText,
-            tokens: lines.flatMap(\.tokens),
+            tokens: uniqueTokens(in: lines),
+            containsCJK: lines.contains(where: \.containsCJK),
+            cjkCandidateText: cjkCandidateText.isEmpty ? nil : cjkCandidateText,
             lines: lines
         )
+    }
+
+    private static func indexedTokens(in normalizedText: String) -> [IndexedToken] {
+        var seen = Set<String>()
+        return SearchTextNormalizer.tokens(in: normalizedText).compactMap { token in
+            guard seen.insert(token).inserted else {
+                return nil
+            }
+            return IndexedToken(token)
+        }
+    }
+
+    private static func uniqueTokens(in lines: [IndexedLine]) -> [IndexedToken] {
+        var seen = Set<String>()
+        return lines.flatMap(\.tokens).filter { token in
+            seen.insert(token.text).inserted
+        }
     }
 
     private static func rawLines(in text: String) -> [(String, NSRange)] {
@@ -306,9 +423,12 @@ struct NoteSearchEngine {
 
     private static func matchScore(
         query: String,
-        queryTokens: [String],
+        queryTokens: [IndexedToken],
         candidate: String,
-        candidateTokens: [String]
+        candidateTokens: [IndexedToken],
+        candidateContainsCJK: Bool,
+        cjkCandidate: String?,
+        similarityCache: inout [TokenPair: Double]
     ) -> Double? {
         if let exactRange = candidate.range(of: query) {
             let position = candidate.distance(from: candidate.startIndex, to: exactRange.lowerBound)
@@ -316,16 +436,23 @@ struct NoteSearchEngine {
             return min(1, 0.91 + positionBonus)
         }
 
-        if SearchTextNormalizer.containsCJK(query),
-           let compactScore = compactWindowScore(query: query, candidate: candidate),
+        if SearchTextNormalizer.containsCJK(query), candidateContainsCJK,
+           let cjkCandidate,
+           let compactScore = compactWindowScore(query: query, candidate: cjkCandidate),
            compactScore >= 0.70 {
             return min(0.89, compactScore + 0.08)
         }
 
-        let tokenScores = queryTokens.map { queryToken in
-            candidateTokens.lazy
-                .map { tokenSimilarity(query: queryToken, candidate: $0) }
-                .max() ?? 0
+        var tokenScores: [Double] = []
+        tokenScores.reserveCapacity(queryTokens.count)
+        for queryToken in queryTokens {
+            tokenScores.append(
+                bestTokenScore(
+                    query: queryToken,
+                    candidates: candidateTokens,
+                    cache: &similarityCache
+                )
+            )
         }
 
         guard let weakest = tokenScores.min(), weakest >= 0.52 else {
@@ -340,24 +467,36 @@ struct NoteSearchEngine {
 
     private static func partialMatchScore(
         query: String,
-        queryTokens: [String],
+        queryTokens: [IndexedToken],
         candidate: String,
-        candidateTokens: [String]
+        candidateTokens: [IndexedToken],
+        candidateContainsCJK: Bool,
+        cjkCandidate: String?,
+        similarityCache: inout [TokenPair: Double]
     ) -> Double? {
         if let score = matchScore(
             query: query,
             queryTokens: queryTokens,
             candidate: candidate,
-            candidateTokens: candidateTokens
+            candidateTokens: candidateTokens,
+            candidateContainsCJK: candidateContainsCJK,
+            cjkCandidate: cjkCandidate,
+            similarityCache: &similarityCache
         ) {
             return score
         }
 
-        let strongestToken = queryTokens.lazy
-            .flatMap { queryToken in
-                candidateTokens.lazy.map { tokenSimilarity(query: queryToken, candidate: $0) }
-            }
-            .max() ?? 0
+        var strongestToken = 0.0
+        for queryToken in queryTokens {
+            strongestToken = max(
+                strongestToken,
+                bestTokenScore(
+                    query: queryToken,
+                    candidates: candidateTokens,
+                    cache: &similarityCache
+                )
+            )
+        }
         return strongestToken >= 0.52 ? strongestToken * 0.75 : nil
     }
 
@@ -377,24 +516,28 @@ struct NoteSearchEngine {
         return 1 - Double(distance) / Double(max(compactQuery.count, 1))
     }
 
-    private static func tokenSimilarity(query: String, candidate: String) -> Double {
-        guard !query.isEmpty, !candidate.isEmpty else {
+    private static func tokenSimilarity(query: IndexedToken, candidate: IndexedToken) -> Double {
+        guard !query.text.isEmpty, !candidate.text.isEmpty else {
             return 0
         }
-        if query == candidate {
+        if query.text == candidate.text {
             return 1
         }
-        if candidate.hasPrefix(query) {
-            return query.count >= 2 ? 0.93 : 0.74
+        if candidate.text.hasPrefix(query.text) {
+            return query.text.count >= 2 ? 0.93 : 0.74
         }
-        if candidate.contains(query) {
-            return query.count >= 2 ? 0.88 : 0.68
+        if candidate.text.contains(query.text) {
+            return query.text.count >= 2 ? 0.88 : 0.68
         }
 
-        let queryCharacters = Array(query)
-        let candidateCharacters = Array(candidate)
+        let queryCharacters = Array(query.text)
+        let candidateCharacters = Array(candidate.text)
         let maximumDistance = allowedEditDistance(for: queryCharacters.count)
         guard maximumDistance > 0 else {
+            return 0
+        }
+
+        guard candidateCharacters.count >= queryCharacters.count - maximumDistance else {
             return 0
         }
 
@@ -407,7 +550,42 @@ struct NoteSearchEngine {
             return 0
         }
 
-        return 1 - (Double(distance) / Double(max(queryCharacters.count, candidateCharacters.count)))
+        return 1 - (
+            Double(distance)
+                / Double(max(queryCharacters.count, candidateCharacters.count))
+        )
+    }
+
+    private static func cachedTokenSimilarity(
+        query: IndexedToken,
+        candidate: IndexedToken,
+        cache: inout [TokenPair: Double]
+    ) -> Double {
+        let key = TokenPair(query: query.text, candidate: candidate.text)
+        if let score = cache[key] {
+            return score
+        }
+        let score = tokenSimilarity(query: query, candidate: candidate)
+        cache[key] = score
+        return score
+    }
+
+    private static func bestTokenScore(
+        query: IndexedToken,
+        candidates: [IndexedToken],
+        cache: inout [TokenPair: Double]
+    ) -> Double {
+        var bestScore = 0.0
+        for candidate in candidates {
+            bestScore = max(
+                bestScore,
+                cachedTokenSimilarity(query: query, candidate: candidate, cache: &cache)
+            )
+            if bestScore == 1 {
+                return bestScore
+            }
+        }
+        return bestScore
     }
 
     private static func allowedEditDistance(for length: Int) -> Int {
@@ -428,74 +606,34 @@ struct NoteSearchEngine {
         candidate: [Character],
         maximumDistance: Int
     ) -> Int? {
-        let minimumWindowLength = max(1, query.count - maximumDistance)
-        let maximumWindowLength = min(candidate.count, query.count + maximumDistance)
-
-        guard minimumWindowLength <= maximumWindowLength else {
-            return boundedLevenshteinDistance(query, candidate, maximumDistance: maximumDistance)
+        guard !query.isEmpty else {
+            return 0
+        }
+        guard !candidate.isEmpty else {
+            return query.count <= maximumDistance ? query.count : nil
         }
 
-        var bestDistance: Int?
-        for windowLength in minimumWindowLength...maximumWindowLength {
-            guard windowLength <= candidate.count else {
-                continue
-            }
+        // The zero first row makes candidate prefixes free. The final row's
+        // minimum is therefore the distance to the best candidate substring.
+        var previous = Array(repeating: 0, count: candidate.count + 1)
+        var current = Array(repeating: 0, count: candidate.count + 1)
 
-            for start in 0...(candidate.count - windowLength) {
-                let window = Array(candidate[start..<(start + windowLength)])
-                if let distance = boundedLevenshteinDistance(
-                    query,
-                    window,
-                    maximumDistance: min(maximumDistance, bestDistance ?? maximumDistance)
-                ) {
-                    bestDistance = min(bestDistance ?? distance, distance)
-                    if bestDistance == 0 {
-                        return 0
-                    }
-                }
-            }
-        }
-        return bestDistance
-    }
-
-    private static func boundedLevenshteinDistance(
-        _ left: [Character],
-        _ right: [Character],
-        maximumDistance: Int
-    ) -> Int? {
-        guard abs(left.count - right.count) <= maximumDistance else {
-            return nil
-        }
-        if left.isEmpty {
-            return right.count <= maximumDistance ? right.count : nil
-        }
-        if right.isEmpty {
-            return left.count <= maximumDistance ? left.count : nil
-        }
-
-        var previous = Array(0...right.count)
-        var current = Array(repeating: 0, count: right.count + 1)
-
-        for leftIndex in 1...left.count {
-            current[0] = leftIndex
-            var rowMinimum = current[0]
-
-            for rightIndex in 1...right.count {
-                let substitutionCost = left[leftIndex - 1] == right[rightIndex - 1] ? 0 : 1
-                current[rightIndex] = min(
-                    min(previous[rightIndex] + 1, current[rightIndex - 1] + 1),
-                    previous[rightIndex - 1] + substitutionCost
+        for queryIndex in 1...query.count {
+            current[0] = queryIndex
+            for candidateIndex in 1...candidate.count {
+                let substitutionCost = query[queryIndex - 1] == candidate[candidateIndex - 1] ? 0 : 1
+                current[candidateIndex] = min(
+                    min(previous[candidateIndex] + 1, current[candidateIndex - 1] + 1),
+                    previous[candidateIndex - 1] + substitutionCost
                 )
-                rowMinimum = min(rowMinimum, current[rightIndex])
-            }
-
-            if rowMinimum > maximumDistance {
-                return nil
             }
             swap(&previous, &current)
         }
 
-        return previous[right.count] <= maximumDistance ? previous[right.count] : nil
+        guard let bestDistance = previous.min(), bestDistance <= maximumDistance else {
+            return nil
+        }
+        return bestDistance
     }
 }
 

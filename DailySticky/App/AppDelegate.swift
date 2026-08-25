@@ -18,6 +18,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var languageCancellable: AnyCancellable?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        guard !Self.isRunningUnitTests else {
+            return
+        }
+
         NSApp.setActivationPolicy(.regular)
 
         let dateKeyService = DateKeyService()
@@ -53,6 +57,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         stickyWindowController.show()
         showFirstRunExperienceIfNeeded()
+    }
+
+    private static var isRunningUnitTests: Bool {
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+            || NSClassFromString("XCTestCase") != nil
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {

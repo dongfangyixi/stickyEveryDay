@@ -13,6 +13,8 @@ final class NoteSearchPanelController: NSObject, NSWindowDelegate {
     private var outsideClickMonitor: Any?
     private var appResignObserver: NSObjectProtocol?
     private var ocrIndexTask: Task<Void, Never>?
+    private var cachedOCRDocuments: [NoteSearchDocument]?
+    private var cachedOCRSourcePages: [String: DayPage]?
 
     init(
         appState: AppState,
@@ -50,11 +52,22 @@ final class NoteSearchPanelController: NSObject, NSWindowDelegate {
         let panel = panel ?? makePanel()
         self.panel = panel
         searchController.reset()
-        searchController.rebuildIndex(
-            with: appState.data.pages,
-            locale: appState.language.locale
-        )
-        beginOCRIndexing(pages: appState.data.pages)
+        let pages = appState.data.pages
+        if cachedOCRSourcePages == pages, let cachedOCRDocuments {
+            searchController.rebuildIndex(
+                with: cachedOCRDocuments,
+                locale: appState.language.locale
+            )
+            searchController.setIndexingImageText(false)
+        } else {
+            cachedOCRDocuments = nil
+            cachedOCRSourcePages = nil
+            searchController.rebuildIndex(
+                with: pages,
+                locale: appState.language.locale
+            )
+            beginOCRIndexing(pages: pages)
+        }
         appState.presentNoteSearch()
         position(panel, noteWindowFrame: noteWindowFrame)
         panel.makeKeyAndOrderFront(nil)
@@ -65,7 +78,6 @@ final class NoteSearchPanelController: NSObject, NSWindowDelegate {
         panel?.orderOut(nil)
         ocrIndexTask?.cancel()
         ocrIndexTask = nil
-        searchController.releaseIndex()
         appState.dismissNoteSearch()
     }
 
@@ -77,7 +89,6 @@ final class NoteSearchPanelController: NSObject, NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         ocrIndexTask?.cancel()
         ocrIndexTask = nil
-        searchController.releaseIndex()
         appState.dismissNoteSearch()
     }
 
@@ -138,6 +149,8 @@ final class NoteSearchPanelController: NSObject, NSWindowDelegate {
             guard let self, !Task.isCancelled else {
                 return
             }
+            self.cachedOCRDocuments = documents
+            self.cachedOCRSourcePages = pages
             self.searchController.rebuildIndex(
                 with: documents,
                 locale: self.appState.language.locale
