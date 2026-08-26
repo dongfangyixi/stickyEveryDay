@@ -485,6 +485,33 @@ final class CurrentNoteFindTests: XCTestCase {
         XCTAssertEqual(controller.positionLabel, "1/3")
     }
 
+    @MainActor
+    func testSearchHandoffPresentsFindAndSelectsTheOpenedOccurrence() {
+        let controller = CurrentNoteFindController()
+        let page = DayPage(
+            dateKey: "2026-08-19",
+            noteText: "transaction one\ntransaction two\ntransaction three",
+            createdAt: .distantPast,
+            updatedAt: .distantPast
+        )
+        controller.update(page: page, locale: Locale(identifier: "en_US"))
+        let request = NoteRevealRequest(
+            dateKey: page.dateKey,
+            query: "transaction",
+            location: .note(range: NSRange(location: 16, length: 11))
+        )
+
+        controller.presentSearchHandoff(request)
+
+        XCTAssertTrue(controller.isPresented)
+        XCTAssertEqual(controller.query, "transaction")
+        XCTAssertEqual(controller.positionLabel, "2/3")
+        controller.moveSelection(by: 1)
+        XCTAssertEqual(controller.positionLabel, "3/3")
+        controller.moveSelection(by: 1)
+        XCTAssertEqual(controller.positionLabel, "1/3")
+    }
+
     private func find(_ query: String, in text: String) -> [CurrentNoteFindMatch] {
         CurrentNoteFindEngine.matches(
             query: query,

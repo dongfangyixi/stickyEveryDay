@@ -8,6 +8,7 @@ final class NoteSearchPanelController: NSObject, NSWindowDelegate {
     private let appState: AppState
     private let searchController: NoteSearchController
     private let ocrSearchIndexer: OCRSearchIndexer
+    private let onRevealSearchResult: (NoteRevealRequest) -> Void
     private var panel: NoteSearchPanel?
     private var anchorScreenRect: NSRect?
     private var outsideClickMonitor: Any?
@@ -19,11 +20,13 @@ final class NoteSearchPanelController: NSObject, NSWindowDelegate {
     init(
         appState: AppState,
         searchController: NoteSearchController? = nil,
-        ocrSearchIndexer: OCRSearchIndexer = OCRSearchIndexer()
+        ocrSearchIndexer: OCRSearchIndexer = OCRSearchIndexer(),
+        onRevealSearchResult: @escaping (NoteRevealRequest) -> Void = { _ in }
     ) {
         self.appState = appState
         self.searchController = searchController ?? NoteSearchController()
         self.ocrSearchIndexer = ocrSearchIndexer
+        self.onRevealSearchResult = onRevealSearchResult
         super.init()
         installDismissalObservers()
     }
@@ -119,7 +122,12 @@ final class NoteSearchPanelController: NSObject, NSWindowDelegate {
                     guard let self else {
                         return
                     }
-                    self.appState.openSearchResult(result, query: self.searchController.query)
+                    if let request = self.appState.openSearchResult(
+                        result,
+                        query: self.searchController.query
+                    ) {
+                        self.onRevealSearchResult(request)
+                    }
                     self.dismiss()
                 },
                 onDismiss: { [weak self] in

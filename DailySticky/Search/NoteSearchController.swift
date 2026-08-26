@@ -142,10 +142,17 @@ final class NoteSearchController: ObservableObject {
             resultByDateKey[result.dateKey] = result
         }
         results = resultByDateKey.values.sorted {
-            if abs($0.score - $1.score) > 0.0001 {
-                return $0.score > $1.score
+            if $0.kind != $1.kind {
+                return $0.kind == .date
             }
-            return $0.dateKey > $1.dateKey
+            if $0.kind == .content,
+               $0.matchingLineCount != $1.matchingLineCount {
+                return $0.matchingLineCount > $1.matchingLineCount
+            }
+            if $0.dateKey != $1.dateKey {
+                return $0.dateKey > $1.dateKey
+            }
+            return $0.score > $1.score
         }
         .prefix(40)
         .map { $0 }

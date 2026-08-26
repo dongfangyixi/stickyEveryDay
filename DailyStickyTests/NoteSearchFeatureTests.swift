@@ -584,9 +584,10 @@ final class NoteSearchFeatureTests: XCTestCase {
             matchLocation: location
         )
 
-        appState.openSearchResult(result, query: "deploy")
+        let request = appState.openSearchResult(result, query: "deploy")
 
         XCTAssertEqual(appState.currentDateKey, "2026-08-09")
+        XCTAssertEqual(request, appState.noteRevealRequest)
         XCTAssertEqual(appState.noteRevealRequest?.dateKey, "2026-08-09")
         XCTAssertEqual(appState.noteRevealRequest?.query, "deploy")
         XCTAssertEqual(appState.noteRevealRequest?.location, location)
@@ -603,9 +604,10 @@ final class NoteSearchFeatureTests: XCTestCase {
             kind: .date
         )
 
-        appState.openSearchResult(result, query: "Aug 9")
+        let request = appState.openSearchResult(result, query: "Aug 9")
 
         XCTAssertEqual(appState.currentDateKey, "2026-08-09")
+        XCTAssertNil(request)
         XCTAssertNil(appState.noteRevealRequest)
     }
 

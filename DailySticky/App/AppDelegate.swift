@@ -45,7 +45,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         self.appState = appState
         self.stickyWindowController = stickyWindowController
-        self.noteSearchPanelController = NoteSearchPanelController(appState: appState)
+        self.noteSearchPanelController = NoteSearchPanelController(
+            appState: appState,
+            onRevealSearchResult: { request in
+                DispatchQueue.main.async {
+                    currentNoteFindController.update(
+                        page: appState.currentPage,
+                        locale: appState.language.locale
+                    )
+                    currentNoteFindController.presentSearchHandoff(request)
+                }
+            }
+        )
         self.currentNoteFindController = currentNoteFindController
         AppRuntime.shared.appState = appState
         AppRuntime.shared.language = appState.language

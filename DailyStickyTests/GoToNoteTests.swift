@@ -67,6 +67,26 @@ final class GoToNoteTests: XCTestCase {
         XCTAssertEqual(controller.results.first?.kind, .content)
     }
 
+    @MainActor
+    func testControllerKeepsContentResultsSortedByMatchCountThenDate() {
+        let controller = NoteSearchController()
+        controller.rebuildIndex(with: [
+            document("2026-08-22", "transaction ages today"),
+            document(
+                "2026-08-19",
+                "transaction one\ntransaction two\ntransaction three"
+            ),
+            document("2026-08-15", "transaction-held-across-await")
+        ])
+
+        controller.query = "transaction"
+
+        XCTAssertEqual(
+            controller.results.map(\.dateKey),
+            ["2026-08-19", "2026-08-22", "2026-08-15"]
+        )
+    }
+
     func testGoToNoteShortcutIsCommandPOnly() {
         XCTAssertTrue(GoToNoteShortcut.matches(
             charactersIgnoringModifiers: "p",

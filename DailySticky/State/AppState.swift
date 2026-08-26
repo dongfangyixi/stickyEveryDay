@@ -206,18 +206,24 @@ final class AppState: ObservableObject {
         openDatePreservingSearchOrigin(dateKey)
     }
 
-    func openSearchResult(_ result: NoteSearchResult, query: String) {
+    @discardableResult
+    func openSearchResult(
+        _ result: NoteSearchResult,
+        query: String
+    ) -> NoteRevealRequest? {
         openSearchResult(result.dateKey)
         guard result.kind == .content,
               let location = result.matchLocation
         else {
-            return
+            return nil
         }
-        noteRevealRequest = NoteRevealRequest(
+        let request = NoteRevealRequest(
             dateKey: result.dateKey,
             query: query,
             location: location
         )
+        noteRevealRequest = request
+        return request
     }
 
     func returnToSearchOrigin() {

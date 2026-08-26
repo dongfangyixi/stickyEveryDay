@@ -159,6 +159,9 @@ final class CurrentNoteFindController: ObservableObject {
     @Published private(set) var isPresented = false
     @Published var query = "" {
         didSet {
+            if !isApplyingSearchHandoff {
+                preferredMatchLocation = nil
+            }
             selectedMatchIndex = 0
             refreshMatches()
         }
@@ -174,6 +177,9 @@ final class CurrentNoteFindController: ObservableObject {
     private var searchableImageText: [SearchableImageText] = []
     private var indexedImageSignature = ""
     private var ocrTask: Task<Void, Never>?
+    private var preferredMatchLocation: NoteSearchMatchLocation?
+    private var lastSearchHandoffRequestID: UUID?
+    private var isApplyingSearchHandoff = false
 
     init(repository: ImageOCRRepository = .shared) {
         self.repository = repository
@@ -203,9 +209,27 @@ final class CurrentNoteFindController: ObservableObject {
         beginOCRIndexingIfNeeded()
     }
 
+    func presentSearchHandoff(_ request: NoteRevealRequest) {
+        guard lastSearchHandoffRequestID != request.id else {
+            return
+        }
+
+        lastSearchHandoffRequestID = request.id
+        preferredMatchLocation = request.location
+        isPresented = true
+
+        isApplyingSearchHandoff = true
+        query = request.query
+        beginOCRIndexingIfNeeded()
+        isApplyingSearchHandoff = false
+        selectPreferredMatchIfAvailable()
+        focusRequestID = UUID()
+    }
+
     func close() {
         query = ""
         isPresented = false
+        preferredMatchLocation = nil
         ocrTask?.cancel()
         ocrTask = nil
         isIndexingImageText = false
@@ -237,6 +261,7 @@ final class CurrentNoteFindController: ObservableObject {
         self.locale = locale
         if dateChanged {
             selectedMatchIndex = 0
+            preferredMatchLocation = nil
         }
 
         let signature = imageSignature(for: page.noteText)
@@ -267,6 +292,19 @@ final class CurrentNoteFindController: ObservableObject {
             locale: locale
         )
         selectedMatchIndex = min(selectedMatchIndex, max(0, matches.count - 1))
+        selectPreferredMatchIfAvailable()
+    }
+
+    private func selectPreferredMatchIfAvailable() {
+        guard let preferredMatchLocation else {
+            return
+        }
+        guard let index = matches.firstIndex(where: { $0.location == preferredMatchLocation }) else {
+            return
+        }
+
+        selectedMatchIndex = index
+        self.preferredMatchLocation = nil
     }
 
     private func imageSignature(for noteText: String) -> String {
