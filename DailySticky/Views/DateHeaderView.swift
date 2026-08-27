@@ -1,131 +1,130 @@
 import AppKit
 import SwiftUI
 
+enum DateHeaderLayout {
+    static let height: CGFloat = 56
+    static let verticalPadding: CGFloat = 8
+    static let horizontalPadding: CGFloat = 8
+    static let controlSize: CGFloat = 34
+    static let controlSpacing: CGFloat = 6
+    static let wideReturnWidth: CGFloat = 84
+    static let compactReturnWidth: CGFloat = 34
+
+    static func controlClusterWidth(isCompact: Bool, hasSearchReturn: Bool) -> CGFloat {
+        let returnWidth = hasSearchReturn
+            ? (isCompact ? compactReturnWidth : wideReturnWidth)
+            : 0
+        return returnWidth
+            + 2 * controlSize
+            + (hasSearchReturn ? 2 : 1) * controlSpacing
+    }
+
+    static func tickerWidth(headerWidth: CGFloat, controlClusterWidth: CGFloat) -> CGFloat {
+        let available = headerWidth - 2 * horizontalPadding - controlClusterWidth
+        return min(
+            DateTickerLayout.maximumWidth,
+            max(DateTickerLayout.minimumWidth, available - controlSpacing)
+        )
+    }
+
+    static func windowDragGapWidth(headerWidth: CGFloat, controlClusterWidth: CGFloat) -> CGFloat {
+        max(
+            0,
+            headerWidth
+                - 2 * horizontalPadding
+                - controlClusterWidth
+                - tickerWidth(
+                    headerWidth: headerWidth,
+                    controlClusterWidth: controlClusterWidth
+                )
+        )
+    }
+}
+
 struct DateHeaderView: View {
     @EnvironmentObject private var appState: AppState
     let onToggleNoteSearch: () -> Void
     let onNoteSearchAnchorChange: (NSRect) -> Void
 
     var body: some View {
-        let palette = appState.themePalette
+        let headerTheme = DateTickerTheme.palette(for: appState.themePalette.kind)
 
         GeometryReader { proxy in
-            let isCompact = proxy.size.width < 400
+            let isCompact = proxy.size.width <= DateTickerLayout.compactHeaderWidth
+            let hasSearchReturn = appState.headerReturnState.isSearchOrigin
+            let controlClusterWidth = DateHeaderLayout.controlClusterWidth(
+                isCompact: isCompact,
+                hasSearchReturn: hasSearchReturn
+            )
+            let tickerWidth = DateHeaderLayout.tickerWidth(
+                headerWidth: proxy.size.width,
+                controlClusterWidth: controlClusterWidth
+            )
+            let dragGapWidth = DateHeaderLayout.windowDragGapWidth(
+                headerWidth: proxy.size.width,
+                controlClusterWidth: controlClusterWidth
+            )
 
-            HStack(spacing: 0) {
-                HStack(spacing: 4) {
-                    Button {
-                        appState.goToPreviousDay()
-                    } label: {
-                        Image(systemName: "chevron.left")
-                    }
-                    .buttonStyle(StickyIconButtonStyle(palette: palette))
-                    .help(appState.localized("Previous day"))
+            VStack(spacing: 0) {
+                WindowDragArea()
+                    .frame(maxWidth: .infinity)
+                    .frame(height: DateHeaderLayout.verticalPadding)
 
-                    Group {
-                        if isCompact {
-                            stableDateTitle(
-                                appState.currentShortDateTitle,
-                                tier: .navigation
-                            )
-                        } else {
-                            ViewThatFits(in: .horizontal) {
-                                stableDateTitle(
-                                    appState.currentDateTitle,
-                                    tier: .full
-                                )
-                                stableDateTitle(
-                                    appState.currentCompactDateTitle,
-                                    tier: .compact
-                                )
-                            }
+                HStack(spacing: 0) {
+                    DateTickerView(headerWidth: proxy.size.width)
+                        .frame(width: tickerWidth, height: DateTickerLayout.bandHeight)
+
+                    WindowDragArea()
+                        .frame(width: dragGapWidth, height: DateTickerLayout.bandHeight)
+
+                    HStack(spacing: DateHeaderLayout.controlSpacing) {
+                        returnChip(isCompact: isCompact, theme: headerTheme)
+
+                        Button {
+                            onToggleNoteSearch()
+                        } label: {
+                            Image(systemName: "magnifyingglass")
                         }
-                    }
-                    .background { WindowDragArea() }
-                    .font(.system(size: 14, weight: .semibold, design: .rounded))
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .frame(height: StickyHeaderControlMetrics.height)
+                        .buttonStyle(
+                            TickerHeaderControlButtonStyle(
+                                background: headerTheme.pill,
+                                foreground: headerTheme.icon,
+                                size: DateHeaderLayout.controlSize,
+                                cornerRadius: 9
+                            )
+                        )
+                        .accessibilityLabel(appState.localized("Go to note"))
+                        .help(appState.localized("Go to note"))
+                        .background {
+                            SearchPanelAnchorReader { screenRect in
+                                onNoteSearchAnchorChange(screenRect)
+                            }
+                            .allowsHitTesting(false)
+                        }
 
-                    Button {
-                        appState.goToNextDay()
-                    } label: {
-                        Image(systemName: "chevron.right")
+                        WindowControlsView(
+                            controlSize: DateHeaderLayout.controlSize,
+                            cornerRadius: 9
+                        )
                     }
-                    .buttonStyle(StickyIconButtonStyle(palette: palette))
-                    .help(appState.localized("Next day"))
+                    .fixedSize(horizontal: true, vertical: false)
                 }
-                .layoutPriority(2)
+                .padding(.horizontal, DateHeaderLayout.horizontalPadding)
 
                 WindowDragArea()
-                    .frame(minWidth: 4, maxWidth: .infinity)
-                    .frame(height: StickyHeaderControlMetrics.height)
-                    .layoutPriority(-1)
-
-                HStack(spacing: isCompact ? 5 : 8) {
-                    returnChip(isCompact: isCompact, palette: palette)
-
-                    Button {
-                        onToggleNoteSearch()
-                    } label: {
-                        Image(systemName: "magnifyingglass")
-                    }
-                    .buttonStyle(
-                        StickyIconButtonStyle(
-                            isActive: appState.isNoteSearchPresented,
-                            palette: palette
-                        )
-                    )
-                    .accessibilityLabel(appState.localized("Go to note"))
-                    .help(appState.localized("Go to note"))
-                    .background {
-                        SearchPanelAnchorReader { screenRect in
-                            onNoteSearchAnchorChange(screenRect)
-                        }
-                        .allowsHitTesting(false)
-                    }
-
-                    WindowControlsView()
-                }
-                .fixedSize(horizontal: true, vertical: false)
-                .layoutPriority(1)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: DateHeaderLayout.verticalPadding)
             }
-            .padding(.horizontal, isCompact ? 8 : 12)
-            .padding(.vertical, 8)
+            .background(headerTheme.bar)
         }
-        .frame(height: StickyHeaderControlMetrics.height + 16)
-    }
-
-    private func stableDateTitle(
-        _ title: String,
-        tier: DateHeaderTitleTier
-    ) -> some View {
-        Text(title)
-            .lineLimit(1)
-            .fixedSize(horizontal: true, vertical: false)
-            .frame(
-                width: DateHeaderTitleMetrics.reservedWidth(
-                    for: tier,
-                    locale: appState.language.locale
-                )
-            )
+        .frame(height: DateHeaderLayout.height)
     }
 
     @ViewBuilder
-    private func returnChip(isCompact: Bool, palette: AppTheme.Palette) -> some View {
+    private func returnChip(isCompact: Bool, theme: DateTickerTheme) -> some View {
         switch appState.headerReturnState {
-        case .none:
+        case .none, .today:
             EmptyView()
-        case .today:
-            Button {
-                appState.jumpToToday()
-            } label: {
-                Text(appState.localized("Today"))
-                    .fixedSize(horizontal: true, vertical: false)
-            }
-            .buttonStyle(StickyHeaderChipButtonStyle(isCompact: isCompact, palette: palette))
-            .accessibilityLabel(appState.localized("Back to today"))
-            .help(appState.localized("Back to today"))
         case let .searchOrigin(dateKey):
             let shortTitle = appState.shortDisplayTitle(for: dateKey)
             let accessibleTitle = appState.accessibleShortDisplayTitle(for: dateKey)
@@ -136,89 +135,78 @@ struct DateHeaderView: View {
                 HStack(spacing: 5) {
                     Image(systemName: "arrow.uturn.backward")
                         .font(.system(size: 14, weight: .regular))
-                    Text(shortTitle)
+                    if !isCompact {
+                        Text(shortTitle)
+                    }
                 }
                 .fixedSize(horizontal: true, vertical: false)
             }
-            .buttonStyle(StickyHeaderChipButtonStyle(isCompact: isCompact, palette: palette))
+            .buttonStyle(
+                TickerHeaderChipButtonStyle(
+                    theme: theme,
+                    width: isCompact ? 34 : 84
+                )
+            )
             .accessibilityLabel(appState.language.returnAccessibilityLabel(date: accessibleTitle))
             .help(appState.language.returnTooltip(date: shortTitle))
         }
     }
 }
 
-enum DateHeaderTitleTier: String, CaseIterable {
-    case full
-    case compact
-    case navigation
-
-    var dateFormatTemplate: String {
-        switch self {
-        case .full:
-            return "yMMMMEEEEd"
-        case .compact:
-            return "yMMMd"
-        case .navigation:
-            return "MMMdEEE"
+private extension HeaderReturnState {
+    var isSearchOrigin: Bool {
+        if case .searchOrigin = self {
+            return true
         }
+        return false
     }
 }
 
-enum DateHeaderTitleMetrics {
-    private static let fontSize: CGFloat = 14
-    private static let safetyPadding: CGFloat = 6
-    private static let cache = NSCache<NSString, NSNumber>()
+struct TickerHeaderControlButtonStyle: ButtonStyle {
+    let background: Color
+    let foreground: Color
+    let size: CGFloat
+    let cornerRadius: CGFloat
 
-    static func reservedWidth(for tier: DateHeaderTitleTier, locale: Locale) -> CGFloat {
-        let locale = normalizedLocale(locale)
-        let cacheKey = "\(locale.identifier)|\(tier.rawValue)" as NSString
-        if let cachedWidth = cache.object(forKey: cacheKey) {
-            return CGFloat(cachedWidth.doubleValue)
-        }
-
-        let formatter = DateFormatter()
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.locale = locale
-        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
-        formatter.calendar = calendar
-        formatter.locale = locale
-        formatter.timeZone = calendar.timeZone
-        formatter.setLocalizedDateFormatFromTemplate(tier.dateFormatTemplate)
-
-        let startDate = calendar.date(from: DateComponents(year: 2024, month: 1, day: 1))!
-        let dayCount = calendar.range(of: .day, in: .year, for: startDate)?.count ?? 366
-        var widestTitle: CGFloat = 0
-
-        for dayOffset in 0..<dayCount {
-            guard let date = calendar.date(byAdding: .day, value: dayOffset, to: startDate) else {
-                continue
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 15, weight: .medium))
+            .foregroundStyle(foreground)
+            .frame(width: size, height: size)
+            .background {
+                ZStack {
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .fill(background)
+                    if configuration.isPressed {
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .fill(foreground.opacity(0.10))
+                    }
+                }
             }
-            widestTitle = max(widestTitle, measuredWidth(of: formatter.string(from: date)))
-        }
-
-        let reservedWidth = ceil(widestTitle + safetyPadding)
-        cache.setObject(NSNumber(value: Double(reservedWidth)), forKey: cacheKey)
-        return reservedWidth
+            .contentShape(Rectangle())
     }
+}
 
-    static func measuredWidth(of title: String) -> CGFloat {
-        let baseFont = NSFont.systemFont(ofSize: fontSize, weight: .semibold)
-        let font: NSFont
-        if let roundedDescriptor = baseFont.fontDescriptor.withDesign(.rounded),
-           let roundedFont = NSFont(descriptor: roundedDescriptor, size: fontSize) {
-            font = roundedFont
-        } else {
-            font = baseFont
-        }
+private struct TickerHeaderChipButtonStyle: ButtonStyle {
+    let theme: DateTickerTheme
+    let width: CGFloat
 
-        return ceil((title as NSString).size(withAttributes: [.font: font]).width)
-    }
-
-    private static func normalizedLocale(_ locale: Locale) -> Locale {
-        guard locale.language.languageCode?.identifier == "en" else {
-            return locale
-        }
-        return Locale(identifier: "en_US")
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(theme.text)
+            .frame(width: width, height: 34)
+            .background {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(theme.pill)
+                    if configuration.isPressed {
+                        RoundedRectangle(cornerRadius: 9, style: .continuous)
+                            .fill(theme.text.opacity(0.08))
+                    }
+                }
+            }
+            .contentShape(Rectangle())
     }
 }
 
@@ -306,8 +294,12 @@ private struct WindowDragArea: NSViewRepresentable {
     func updateNSView(_ nsView: NSView, context: Context) {}
 }
 
-private final class WindowDragNSView: NSView {
-    override func mouseDown(with event: NSEvent) {
-        window?.performDrag(with: event)
+final class WindowDragNSView: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        bounds.contains(point) ? self : nil
+    }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
     }
 }

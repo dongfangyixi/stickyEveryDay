@@ -153,14 +153,16 @@ enum StickyHeaderControlMetrics {
 struct StickyIconButtonStyle: ButtonStyle {
     var isActive: Bool = false
     var palette: AppTheme.Palette = AppTheme.yellow
+    var size: CGFloat = StickyHeaderControlMetrics.height
+    var cornerRadius: CGFloat = StickyHeaderControlMetrics.cornerRadius
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 13, weight: .semibold))
             .foregroundStyle(isActive ? palette.accent : palette.text)
-            .frame(width: StickyHeaderControlMetrics.height, height: StickyHeaderControlMetrics.height)
+            .frame(width: size, height: size)
             .background(
-                RoundedRectangle(cornerRadius: StickyHeaderControlMetrics.cornerRadius, style: .continuous)
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .fill(configuration.isPressed ? palette.controlPressedBackground : backgroundColor)
             )
     }
@@ -190,16 +192,18 @@ struct StickyTextButtonStyle: ButtonStyle {
 struct StickyHeaderChipButtonStyle: ButtonStyle {
     let isCompact: Bool
     var palette: AppTheme.Palette = AppTheme.yellow
+    var height: CGFloat = StickyHeaderControlMetrics.height
+    var cornerRadius: CGFloat = StickyHeaderControlMetrics.cornerRadius
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: isCompact ? 13 : 13.5, weight: .semibold))
             .foregroundStyle(palette.text)
             .padding(.horizontal, isCompact ? 9 : 11)
-            .frame(height: StickyHeaderControlMetrics.height)
+            .frame(height: height)
             .background(
                 RoundedRectangle(
-                    cornerRadius: StickyHeaderControlMetrics.cornerRadius,
+                    cornerRadius: cornerRadius,
                     style: .continuous
                 )
                 .fill(

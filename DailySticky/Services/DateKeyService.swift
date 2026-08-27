@@ -1,5 +1,12 @@
 import Foundation
 
+struct DateTickerFaceContent: Equatable {
+    let weekday: String
+    let day: String
+    let month: String
+    let accessibilityTitle: String
+}
+
 final class DateKeyService {
     private let calendar: Calendar
     private var locale: Locale
@@ -9,6 +16,9 @@ final class DateKeyService {
     private let compactNavigationDateFormatter: DateFormatter
     private let shortDisplayDateFormatter: DateFormatter
     private let accessibleShortDisplayDateFormatter: DateFormatter
+    private let tickerWeekdayFormatter: DateFormatter
+    private let tickerDayFormatter: DateFormatter
+    private let tickerMonthFormatter: DateFormatter
 
     init(
         calendar: Calendar = .autoupdatingCurrent,
@@ -58,6 +68,27 @@ final class DateKeyService {
         accessibleShortDisplayFormatter.timeZone = calendar.timeZone
         accessibleShortDisplayFormatter.setLocalizedDateFormatFromTemplate("MMMMd")
         self.accessibleShortDisplayDateFormatter = accessibleShortDisplayFormatter
+
+        let tickerWeekdayFormatter = DateFormatter()
+        tickerWeekdayFormatter.calendar = calendar
+        tickerWeekdayFormatter.locale = self.locale
+        tickerWeekdayFormatter.timeZone = calendar.timeZone
+        tickerWeekdayFormatter.setLocalizedDateFormatFromTemplate("EEE")
+        self.tickerWeekdayFormatter = tickerWeekdayFormatter
+
+        let tickerDayFormatter = DateFormatter()
+        tickerDayFormatter.calendar = calendar
+        tickerDayFormatter.locale = self.locale
+        tickerDayFormatter.timeZone = calendar.timeZone
+        tickerDayFormatter.setLocalizedDateFormatFromTemplate("d")
+        self.tickerDayFormatter = tickerDayFormatter
+
+        let tickerMonthFormatter = DateFormatter()
+        tickerMonthFormatter.calendar = calendar
+        tickerMonthFormatter.locale = self.locale
+        tickerMonthFormatter.timeZone = calendar.timeZone
+        tickerMonthFormatter.setLocalizedDateFormatFromTemplate("MMM")
+        self.tickerMonthFormatter = tickerMonthFormatter
     }
 
     func updateLocale(_ locale: Locale) {
@@ -77,6 +108,12 @@ final class DateKeyService {
         shortDisplayDateFormatter.setLocalizedDateFormatFromTemplate("MMMd")
         accessibleShortDisplayDateFormatter.locale = normalizedLocale
         accessibleShortDisplayDateFormatter.setLocalizedDateFormatFromTemplate("MMMMd")
+        tickerWeekdayFormatter.locale = normalizedLocale
+        tickerWeekdayFormatter.setLocalizedDateFormatFromTemplate("EEE")
+        tickerDayFormatter.locale = normalizedLocale
+        tickerDayFormatter.setLocalizedDateFormatFromTemplate("d")
+        tickerMonthFormatter.locale = normalizedLocale
+        tickerMonthFormatter.setLocalizedDateFormatFromTemplate("MMM")
     }
 
     private static func normalizedLocale(_ locale: Locale) -> Locale {
@@ -117,6 +154,21 @@ final class DateKeyService {
         return self.dateKey(for: movedDate)
     }
 
+    func dayOffset(from startDateKey: String, to endDateKey: String) -> Int? {
+        guard
+            let startDate = date(from: startDateKey),
+            let endDate = date(from: endDateKey)
+        else {
+            return nil
+        }
+
+        return calendar.dateComponents(
+            [.day],
+            from: calendar.startOfDay(for: startDate),
+            to: calendar.startOfDay(for: endDate)
+        ).day
+    }
+
     func displayTitle(for dateKey: String) -> String {
         guard let date = date(from: dateKey) else {
             return dateKey
@@ -155,5 +207,18 @@ final class DateKeyService {
         }
 
         return accessibleShortDisplayDateFormatter.string(from: date)
+    }
+
+    func tickerFaceContent(for dateKey: String) -> DateTickerFaceContent? {
+        guard let date = date(from: dateKey) else {
+            return nil
+        }
+
+        return DateTickerFaceContent(
+            weekday: tickerWeekdayFormatter.string(from: date).uppercased(with: locale),
+            day: tickerDayFormatter.string(from: date),
+            month: tickerMonthFormatter.string(from: date).uppercased(with: locale),
+            accessibilityTitle: displayDateFormatter.string(from: date)
+        )
     }
 }

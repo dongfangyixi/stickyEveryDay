@@ -58,6 +58,17 @@ final class AppState: ObservableObject {
         currentDateKey == dateKeyService.todayDateKey()
     }
 
+    var todayDateKey: String {
+        dateKeyService.todayDateKey()
+    }
+
+    var currentDayOffsetFromToday: Int {
+        dateKeyService.dayOffset(
+            from: dateKeyService.todayDateKey(),
+            to: currentDateKey
+        ) ?? 0
+    }
+
     var dataFilePath: String {
         dataStore.dataFileURL.path
     }
@@ -83,6 +94,14 @@ final class AppState: ObservableObject {
 
     func accessibleShortDisplayTitle(for dateKey: String) -> String {
         dateKeyService.accessibleShortDisplayTitle(for: dateKey)
+    }
+
+    func dateKey(byAddingDays days: Int, to dateKey: String) -> String? {
+        dateKeyService.dateKey(byAddingDays: days, to: dateKey)
+    }
+
+    func tickerFaceContent(for dateKey: String) -> DateTickerFaceContent? {
+        dateKeyService.tickerFaceContent(for: dateKey)
     }
 
     init(

@@ -2,16 +2,25 @@ import SwiftUI
 
 struct WindowControlsView: View {
     @EnvironmentObject private var appState: AppState
+    var controlSize: CGFloat = StickyHeaderControlMetrics.height
+    var cornerRadius: CGFloat = StickyHeaderControlMetrics.cornerRadius
 
     var body: some View {
-        let palette = appState.themePalette
+        let headerTheme = DateTickerTheme.palette(for: appState.themePalette.kind)
 
         Button {
             appState.togglePinned()
         } label: {
             Image(systemName: appState.isPinned ? "pin.fill" : "pin")
         }
-        .buttonStyle(StickyIconButtonStyle(isActive: appState.isPinned, palette: palette))
+        .buttonStyle(
+            TickerHeaderControlButtonStyle(
+                background: headerTheme.pinBackground,
+                foreground: headerTheme.accent,
+                size: controlSize,
+                cornerRadius: cornerRadius
+            )
+        )
         .help(
             appState.localized(appState.isPinned ? "Unpin window" : "Pin window")
         )

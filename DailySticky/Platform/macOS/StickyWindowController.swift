@@ -2,13 +2,56 @@ import AppKit
 import Combine
 import SwiftUI
 
-private final class StickyWindow: NSWindow {
+final class StickyWindow: NSWindow {
+    override init(
+        contentRect: NSRect,
+        styleMask style: NSWindow.StyleMask,
+        backing backingStoreType: NSWindow.BackingStoreType,
+        defer flag: Bool
+    ) {
+        super.init(
+            contentRect: contentRect,
+            styleMask: style,
+            backing: backingStoreType,
+            defer: flag
+        )
+        isMovable = false
+        isMovableByWindowBackground = false
+    }
+
     override var canBecomeKey: Bool {
         true
     }
 
     override var canBecomeMain: Bool {
         true
+    }
+
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .leftMouseDown,
+           let contentView,
+           let hitView = contentView.hitTest(event.locationInWindow),
+           hitView.isInsideWindowDragRegion {
+            isMovable = true
+            performDrag(with: event)
+            isMovable = false
+            return
+        }
+
+        super.sendEvent(event)
+    }
+}
+
+extension NSView {
+    var isInsideWindowDragRegion: Bool {
+        var candidate: NSView? = self
+        while let view = candidate {
+            if view is WindowDragNSView {
+                return true
+            }
+            candidate = view.superview
+        }
+        return false
     }
 }
 
