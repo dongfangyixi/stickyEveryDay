@@ -26,10 +26,10 @@ final class DateTickerTests: XCTestCase {
         XCTAssertTrue(dragRegion.isInsideWindowDragRegion)
     }
 
-    func testDensitySwitchesAtFourHundredPointHeaderWidth() {
-        XCTAssertEqual(DateTickerLayout.density(forHeaderWidth: 399), .numbersOnly)
-        XCTAssertEqual(DateTickerLayout.density(forHeaderWidth: 400), .numbersOnly)
-        XCTAssertEqual(DateTickerLayout.density(forHeaderWidth: 401), .fullFaces)
+    func testTickerUsesTheFourFortyPrototypeFacesAtEveryWindowWidth() {
+        XCTAssertEqual(DateTickerLayout.density(forHeaderWidth: 320), .fullFaces)
+        XCTAssertEqual(DateTickerLayout.density(forHeaderWidth: 400), .fullFaces)
+        XCTAssertEqual(DateTickerLayout.density(forHeaderWidth: 900), .fullFaces)
     }
 
     func testV2CurvatureUsesTwentyDegreeFacesAndThreeHundredPointPerspective() {
@@ -81,7 +81,8 @@ final class DateTickerTests: XCTestCase {
     func testDialUsesPrototypeMaximumWidthAndLeavesWideHeaderSpaceDraggable() {
         let controls = DateHeaderLayout.controlClusterWidth(
             isCompact: false,
-            hasSearchReturn: true
+            hasSearchReturn: true,
+            actionControlMode: .individual
         )
 
         XCTAssertEqual(controls, 164)
@@ -108,19 +109,81 @@ final class DateTickerTests: XCTestCase {
         )
     }
 
-    func testCompactHeaderReservesEnoughWidthForDialAndAllControls() {
+    func testFourFortyHeaderUsesThePrototypeTickerWidth() {
         let controls = DateHeaderLayout.controlClusterWidth(
-            isCompact: true,
-            hasSearchReturn: true
+            isCompact: false,
+            hasSearchReturn: true,
+            actionControlMode: .individual
         )
 
-        XCTAssertEqual(controls, 114)
+        XCTAssertEqual(controls, 164)
+        XCTAssertEqual(
+            DateHeaderLayout.tickerWidth(
+                headerWidth: 440,
+                controlClusterWidth: controls
+            ),
+            254
+        )
+        XCTAssertEqual(
+            DateHeaderLayout.windowDragGapWidth(
+                headerWidth: 440,
+                controlClusterWidth: controls
+            ),
+            DateHeaderLayout.controlSpacing
+        )
+    }
+
+    func testSmallestHeaderCollapsesGoToAndPinIntoMoreMenu() {
+        XCTAssertEqual(
+            DateHeaderLayout.actionControlMode(forHeaderWidth: 320),
+            .moreMenu
+        )
+        XCTAssertEqual(
+            DateHeaderLayout.actionControlMode(forHeaderWidth: 360),
+            .moreMenu
+        )
+        XCTAssertEqual(
+            DateHeaderLayout.actionControlMode(forHeaderWidth: 361),
+            .individual
+        )
+
+        let controls = DateHeaderLayout.controlClusterWidth(
+            isCompact: true,
+            hasSearchReturn: false,
+            actionControlMode: .moreMenu
+        )
+
+        XCTAssertEqual(controls, 34)
         XCTAssertEqual(
             DateHeaderLayout.tickerWidth(
                 headerWidth: 320,
                 controlClusterWidth: controls
             ),
-            184
+            254
+        )
+        XCTAssertEqual(
+            DateHeaderLayout.windowDragGapWidth(
+                headerWidth: 320,
+                controlClusterWidth: controls
+            ),
+            16
+        )
+    }
+
+    func testSmallestHeaderStillFitsACompactSearchReturnAndMoreMenu() {
+        let controls = DateHeaderLayout.controlClusterWidth(
+            isCompact: true,
+            hasSearchReturn: true,
+            actionControlMode: .moreMenu
+        )
+
+        XCTAssertEqual(controls, 74)
+        XCTAssertEqual(
+            DateHeaderLayout.tickerWidth(
+                headerWidth: 320,
+                controlClusterWidth: controls
+            ),
+            224
         )
         XCTAssertEqual(
             DateHeaderLayout.windowDragGapWidth(
@@ -136,7 +199,10 @@ final class DateTickerTests: XCTestCase {
             for hasSearchReturn in [false, true] {
                 let controls = DateHeaderLayout.controlClusterWidth(
                     isCompact: headerWidth <= DateTickerLayout.compactHeaderWidth,
-                    hasSearchReturn: hasSearchReturn
+                    hasSearchReturn: hasSearchReturn,
+                    actionControlMode: DateHeaderLayout.actionControlMode(
+                        forHeaderWidth: headerWidth
+                    )
                 )
                 let ticker = DateHeaderLayout.tickerWidth(
                     headerWidth: headerWidth,

@@ -37,7 +37,8 @@ enum DateTickerLayout {
     static let compactHeaderWidth: CGFloat = 400
     static let bandHeight: CGFloat = 40
     static let minimumWidth: CGFloat = 126
-    static let maximumWidth: CGFloat = 374
+    // The 440 pt prototype allocates 254 pt to the ticker after its controls.
+    static let maximumWidth: CGFloat = 254
     static let fullFacePitch: CGFloat = 92
     static let compactFacePitch: CGFloat = 46
     static let anglePerDay: CGFloat = 20
@@ -52,8 +53,8 @@ enum DateTickerLayout {
     static let springStopThreshold: CGFloat = 0.05
     static let springFrameNanoseconds: UInt64 = 16_666_667
 
-    static func density(forHeaderWidth width: CGFloat) -> DateTickerDensity {
-        width <= compactHeaderWidth ? .numbersOnly : .fullFaces
+    static func density(forHeaderWidth _: CGFloat) -> DateTickerDensity {
+        .fullFaces
     }
 
     static func pitch(for density: DateTickerDensity) -> CGFloat {

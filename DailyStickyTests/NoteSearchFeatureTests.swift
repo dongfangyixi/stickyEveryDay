@@ -456,6 +456,7 @@ final class NoteSearchFeatureTests: XCTestCase {
                 "Search notes",
                 "Go to Note",
                 "Go to note",
+                "More",
                 "Search notes or enter a date",
                 "No matching notes or dates",
                 "Empty note",

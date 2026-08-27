@@ -1,6 +1,11 @@
 import AppKit
 import SwiftUI
 
+enum DateHeaderActionControlMode: Equatable {
+    case individual
+    case moreMenu
+}
+
 enum DateHeaderLayout {
     static let height: CGFloat = 56
     static let verticalPadding: CGFloat = 8
@@ -9,14 +14,28 @@ enum DateHeaderLayout {
     static let controlSpacing: CGFloat = 6
     static let wideReturnWidth: CGFloat = 84
     static let compactReturnWidth: CGFloat = 34
+    static let moreMenuHeaderWidth: CGFloat = 360
 
-    static func controlClusterWidth(isCompact: Bool, hasSearchReturn: Bool) -> CGFloat {
+    static func actionControlMode(
+        forHeaderWidth headerWidth: CGFloat
+    ) -> DateHeaderActionControlMode {
+        headerWidth <= moreMenuHeaderWidth ? .moreMenu : .individual
+    }
+
+    static func controlClusterWidth(
+        isCompact: Bool,
+        hasSearchReturn: Bool,
+        actionControlMode: DateHeaderActionControlMode
+    ) -> CGFloat {
         let returnWidth = hasSearchReturn
             ? (isCompact ? compactReturnWidth : wideReturnWidth)
             : 0
+        let actionWidth = actionControlMode == .moreMenu
+            ? controlSize
+            : 2 * controlSize + controlSpacing
         return returnWidth
-            + 2 * controlSize
-            + (hasSearchReturn ? 2 : 1) * controlSpacing
+            + actionWidth
+            + (hasSearchReturn ? controlSpacing : 0)
     }
 
     static func tickerWidth(headerWidth: CGFloat, controlClusterWidth: CGFloat) -> CGFloat {
@@ -52,9 +71,13 @@ struct DateHeaderView: View {
         GeometryReader { proxy in
             let isCompact = proxy.size.width <= DateTickerLayout.compactHeaderWidth
             let hasSearchReturn = appState.headerReturnState.isSearchOrigin
+            let actionControlMode = DateHeaderLayout.actionControlMode(
+                forHeaderWidth: proxy.size.width
+            )
             let controlClusterWidth = DateHeaderLayout.controlClusterWidth(
                 isCompact: isCompact,
-                hasSearchReturn: hasSearchReturn
+                hasSearchReturn: hasSearchReturn,
+                actionControlMode: actionControlMode
             )
             let tickerWidth = DateHeaderLayout.tickerWidth(
                 headerWidth: proxy.size.width,
@@ -80,31 +103,9 @@ struct DateHeaderView: View {
                     HStack(spacing: DateHeaderLayout.controlSpacing) {
                         returnChip(isCompact: isCompact, theme: headerTheme)
 
-                        Button {
-                            onToggleNoteSearch()
-                        } label: {
-                            Image(systemName: "magnifyingglass")
-                        }
-                        .buttonStyle(
-                            TickerHeaderControlButtonStyle(
-                                background: headerTheme.pill,
-                                foreground: headerTheme.icon,
-                                size: DateHeaderLayout.controlSize,
-                                cornerRadius: 9
-                            )
-                        )
-                        .accessibilityLabel(appState.localized("Go to note"))
-                        .help(appState.localized("Go to note"))
-                        .background {
-                            SearchPanelAnchorReader { screenRect in
-                                onNoteSearchAnchorChange(screenRect)
-                            }
-                            .allowsHitTesting(false)
-                        }
-
-                        WindowControlsView(
-                            controlSize: DateHeaderLayout.controlSize,
-                            cornerRadius: 9
+                        actionControls(
+                            mode: actionControlMode,
+                            theme: headerTheme
                         )
                     }
                     .fixedSize(horizontal: true, vertical: false)
@@ -118,6 +119,94 @@ struct DateHeaderView: View {
             .background(headerTheme.bar)
         }
         .frame(height: DateHeaderLayout.height)
+    }
+
+    @ViewBuilder
+    private func actionControls(
+        mode: DateHeaderActionControlMode,
+        theme: DateTickerTheme
+    ) -> some View {
+        switch mode {
+        case .individual:
+            goToButton(theme: theme)
+
+            WindowControlsView(
+                controlSize: DateHeaderLayout.controlSize,
+                cornerRadius: 9
+            )
+        case .moreMenu:
+            Menu {
+                Button {
+                    onToggleNoteSearch()
+                } label: {
+                    Label(
+                        appState.localized("Go to note"),
+                        systemImage: "magnifyingglass"
+                    )
+                }
+
+                Divider()
+
+                Button {
+                    appState.togglePinned()
+                } label: {
+                    Label(
+                        appState.localized(
+                            appState.isPinned ? "Unpin window" : "Pin window"
+                        ),
+                        systemImage: appState.isPinned ? "pin.slash" : "pin"
+                    )
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(theme.icon)
+                    .frame(
+                        width: DateHeaderLayout.controlSize,
+                        height: DateHeaderLayout.controlSize
+                    )
+                    .background {
+                        RoundedRectangle(cornerRadius: 9, style: .continuous)
+                            .fill(theme.pill)
+                    }
+                    .contentShape(Rectangle())
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .accessibilityLabel(appState.localized("More"))
+            .help(appState.localized("More"))
+            .background {
+                SearchPanelAnchorReader { screenRect in
+                    onNoteSearchAnchorChange(screenRect)
+                }
+                .allowsHitTesting(false)
+            }
+        }
+    }
+
+    private func goToButton(theme: DateTickerTheme) -> some View {
+        Button {
+            onToggleNoteSearch()
+        } label: {
+            Image(systemName: "magnifyingglass")
+        }
+        .buttonStyle(
+            TickerHeaderControlButtonStyle(
+                background: theme.pill,
+                foreground: theme.icon,
+                size: DateHeaderLayout.controlSize,
+                cornerRadius: 9
+            )
+        )
+        .accessibilityLabel(appState.localized("Go to note"))
+        .help(appState.localized("Go to note"))
+        .background {
+            SearchPanelAnchorReader { screenRect in
+                onNoteSearchAnchorChange(screenRect)
+            }
+            .allowsHitTesting(false)
+        }
     }
 
     @ViewBuilder
