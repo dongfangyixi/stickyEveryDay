@@ -9,6 +9,7 @@ enum DateHeaderLayout {
     static let controlSpacing: CGFloat = 6
     static let wideReturnWidth: CGFloat = 84
     static let compactReturnWidth: CGFloat = 34
+    static let tickerWidth = DateTickerLayout.fixedWidth
 
     static func controlClusterWidth(isCompact: Bool, hasSearchReturn: Bool) -> CGFloat {
         let returnWidth = hasSearchReturn
@@ -19,24 +20,13 @@ enum DateHeaderLayout {
             + (hasSearchReturn ? 2 : 1) * controlSpacing
     }
 
-    static func tickerWidth(headerWidth: CGFloat, controlClusterWidth: CGFloat) -> CGFloat {
-        let available = headerWidth - 2 * horizontalPadding - controlClusterWidth
-        return min(
-            DateTickerLayout.maximumWidth,
-            max(DateTickerLayout.minimumWidth, available - controlSpacing)
-        )
-    }
-
     static func windowDragGapWidth(headerWidth: CGFloat, controlClusterWidth: CGFloat) -> CGFloat {
         max(
             0,
             headerWidth
                 - 2 * horizontalPadding
                 - controlClusterWidth
-                - tickerWidth(
-                    headerWidth: headerWidth,
-                    controlClusterWidth: controlClusterWidth
-                )
+                - tickerWidth
         )
     }
 }
@@ -56,10 +46,6 @@ struct DateHeaderView: View {
                 isCompact: isCompact,
                 hasSearchReturn: hasSearchReturn
             )
-            let tickerWidth = DateHeaderLayout.tickerWidth(
-                headerWidth: proxy.size.width,
-                controlClusterWidth: controlClusterWidth
-            )
             let dragGapWidth = DateHeaderLayout.windowDragGapWidth(
                 headerWidth: proxy.size.width,
                 controlClusterWidth: controlClusterWidth
@@ -71,8 +57,11 @@ struct DateHeaderView: View {
                     .frame(height: DateHeaderLayout.verticalPadding)
 
                 HStack(spacing: 0) {
-                    DateTickerView(headerWidth: proxy.size.width)
-                        .frame(width: tickerWidth, height: DateTickerLayout.bandHeight)
+                    DateTickerView()
+                        .frame(
+                            width: DateHeaderLayout.tickerWidth,
+                            height: DateTickerLayout.bandHeight
+                        )
 
                     WindowDragArea()
                         .frame(width: dragGapWidth, height: DateTickerLayout.bandHeight)

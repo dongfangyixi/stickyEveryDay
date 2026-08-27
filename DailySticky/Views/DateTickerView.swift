@@ -36,8 +36,8 @@ struct DateTickerFlickPlan: Equatable {
 enum DateTickerLayout {
     static let compactHeaderWidth: CGFloat = 400
     static let bandHeight: CGFloat = 40
-    static let minimumWidth: CGFloat = 126
-    static let maximumWidth: CGFloat = 374
+    static let fixedWidth: CGFloat = 184
+    static let density: DateTickerDensity = .numbersOnly
     static let fullFacePitch: CGFloat = 92
     static let compactFacePitch: CGFloat = 46
     static let anglePerDay: CGFloat = 20
@@ -51,10 +51,6 @@ enum DateTickerLayout {
     static let springLambda: CGFloat = 0.18
     static let springStopThreshold: CGFloat = 0.05
     static let springFrameNanoseconds: UInt64 = 16_666_667
-
-    static func density(forHeaderWidth width: CGFloat) -> DateTickerDensity {
-        width <= compactHeaderWidth ? .numbersOnly : .fullFaces
-    }
 
     static func pitch(for density: DateTickerDensity) -> CGFloat {
         density == .fullFaces ? fullFacePitch : compactFacePitch
@@ -389,7 +385,6 @@ struct DateTickerTheme {
 
 struct DateTickerView: View {
     @EnvironmentObject private var appState: AppState
-    let headerWidth: CGFloat
 
     @GestureState private var dragTranslation: CGFloat = 0
     @State private var settleRotation: CGFloat = 0
@@ -399,7 +394,7 @@ struct DateTickerView: View {
     @State private var isHoveringTodayTab = false
 
     private var density: DateTickerDensity {
-        DateTickerLayout.density(forHeaderWidth: headerWidth)
+        DateTickerLayout.density
     }
 
     private var visualRotation: CGFloat {
@@ -479,7 +474,7 @@ struct DateTickerView: View {
                 )
             }
         }
-        .frame(minWidth: DateTickerLayout.minimumWidth)
+        .frame(width: DateTickerLayout.fixedWidth)
         .frame(height: DateTickerLayout.bandHeight)
         .onDisappear {
             cancelNavigationAnimation()

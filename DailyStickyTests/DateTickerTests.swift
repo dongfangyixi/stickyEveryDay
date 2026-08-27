@@ -26,10 +26,8 @@ final class DateTickerTests: XCTestCase {
         XCTAssertTrue(dragRegion.isInsideWindowDragRegion)
     }
 
-    func testDensitySwitchesAtFourHundredPointHeaderWidth() {
-        XCTAssertEqual(DateTickerLayout.density(forHeaderWidth: 399), .numbersOnly)
-        XCTAssertEqual(DateTickerLayout.density(forHeaderWidth: 400), .numbersOnly)
-        XCTAssertEqual(DateTickerLayout.density(forHeaderWidth: 401), .fullFaces)
+    func testTickerAlwaysUsesDenseFacesAtEveryHeaderWidth() {
+        XCTAssertEqual(DateTickerLayout.density, .numbersOnly)
     }
 
     func testV2CurvatureUsesTwentyDegreeFacesAndThreeHundredPointPerspective() {
@@ -78,27 +76,14 @@ final class DateTickerTests: XCTestCase {
         )
     }
 
-    func testDialUsesPrototypeMaximumWidthAndLeavesWideHeaderSpaceDraggable() {
+    func testDialKeepsItsCompactWidthAndLeavesWideHeaderSpaceDraggable() {
         let controls = DateHeaderLayout.controlClusterWidth(
             isCompact: false,
             hasSearchReturn: true
         )
 
         XCTAssertEqual(controls, 164)
-        XCTAssertEqual(
-            DateHeaderLayout.tickerWidth(
-                headerWidth: 560,
-                controlClusterWidth: controls
-            ),
-            DateTickerLayout.maximumWidth
-        )
-        XCTAssertEqual(
-            DateHeaderLayout.tickerWidth(
-                headerWidth: 900,
-                controlClusterWidth: controls
-            ),
-            DateTickerLayout.maximumWidth
-        )
+        XCTAssertEqual(DateHeaderLayout.tickerWidth, DateTickerLayout.fixedWidth)
         XCTAssertGreaterThan(
             DateHeaderLayout.windowDragGapWidth(
                 headerWidth: 900,
@@ -115,13 +100,7 @@ final class DateTickerTests: XCTestCase {
         )
 
         XCTAssertEqual(controls, 114)
-        XCTAssertEqual(
-            DateHeaderLayout.tickerWidth(
-                headerWidth: 320,
-                controlClusterWidth: controls
-            ),
-            184
-        )
+        XCTAssertEqual(DateHeaderLayout.tickerWidth, 184)
         XCTAssertEqual(
             DateHeaderLayout.windowDragGapWidth(
                 headerWidth: 320,
@@ -138,10 +117,7 @@ final class DateTickerTests: XCTestCase {
                     isCompact: headerWidth <= DateTickerLayout.compactHeaderWidth,
                     hasSearchReturn: hasSearchReturn
                 )
-                let ticker = DateHeaderLayout.tickerWidth(
-                    headerWidth: headerWidth,
-                    controlClusterWidth: controls
-                )
+                let ticker = DateHeaderLayout.tickerWidth
                 let dragGap = DateHeaderLayout.windowDragGapWidth(
                     headerWidth: headerWidth,
                     controlClusterWidth: controls
@@ -184,9 +160,11 @@ final class DateTickerTests: XCTestCase {
     }
 
     func testSettledDialShowsOnlyTwoReadableFacesOnEachSide() {
+        let projectionReferenceWidth: CGFloat = 374
+
         for density in [DateTickerDensity.fullFaces, .numbersOnly] {
             let offsets = DateTickerLayout.visibleDayOffsets(
-                tickerWidth: DateTickerLayout.maximumWidth,
+                tickerWidth: projectionReferenceWidth,
                 density: density,
                 visualRotation: 0
             )
@@ -197,7 +175,7 @@ final class DateTickerTests: XCTestCase {
 
     func testNextRimFaceEntersContinuouslyDuringRotation() {
         let offsets = DateTickerLayout.visibleDayOffsets(
-            tickerWidth: DateTickerLayout.maximumWidth,
+            tickerWidth: 374,
             density: .fullFaces,
             visualRotation: 10
         )
