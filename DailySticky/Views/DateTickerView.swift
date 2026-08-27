@@ -22,6 +22,11 @@ struct DateTickerProjection: Equatable {
     let isVisible: Bool
 }
 
+struct DateTickerFacePlacement: Identifiable, Equatable {
+    let id: String
+    let offset: Int
+}
+
 enum DateTickerLayout {
     static let compactHeaderWidth: CGFloat = 400
     static let bandHeight: CGFloat = 40
@@ -33,8 +38,10 @@ enum DateTickerLayout {
     static let dragPointsPerDay: CGFloat = 44
     static let perspective: CGFloat = 300
     static let maximumFaceAngle: CGFloat = 74
+    static let maximumReadableFaceAngle: CGFloat = 60
     static let maximumFlickDays = 5
     static let todayTabWidth: CGFloat = 34
+    static let clickSecondsPerDay = 0.14
 
     static func density(forHeaderWidth width: CGFloat) -> DateTickerDensity {
         width <= compactHeaderWidth ? .numbersOnly : .fullFaces
@@ -93,7 +100,10 @@ enum DateTickerLayout {
         let depthScale = perspective
             / (perspective + radius * (1 - cosine))
         let x = projectedX(angle: angle, density: density)
-        let isVisible = absoluteAngle <= maximumFaceAngle
+        // The prototype's native 3D/vignette stack fully conceals the face at
+        // 60 degrees. Our projected SwiftUI faces need the same explicit rim
+        // cutoff so a second, overlapping date cannot leak through the fade.
+        let isVisible = absoluteAngle < maximumReadableFaceAngle
             && abs(x) <= (tickerWidth / 2) + pitch(for: density) * 0.35
 
         return DateTickerProjection(
@@ -185,6 +195,14 @@ enum DateTickerLayout {
         navigatingBy days: Int
     ) -> CGFloat {
         visualRotation - CGFloat(days) * anglePerDay
+    }
+
+    static func clickTargetRotation(navigatingBy days: Int) -> CGFloat {
+        CGFloat(days) * anglePerDay
+    }
+
+    static func clickAnimationDuration(navigatingBy days: Int) -> TimeInterval {
+        Double(abs(days)) * clickSecondsPerDay
     }
 
     static func clickedDayOffset(
@@ -340,6 +358,8 @@ struct DateTickerView: View {
 
     @GestureState private var dragTranslation: CGFloat = 0
     @State private var settleRotation: CGFloat = 0
+    @State private var clickNavigationTask: Task<Void, Never>?
+    @State private var clickAnimationID: UUID?
     @State private var isHovering = false
     @State private var isHoveringTodayTab = false
 
@@ -427,6 +447,7 @@ struct DateTickerView: View {
         .frame(minWidth: DateTickerLayout.minimumWidth)
         .frame(height: DateTickerLayout.bandHeight)
         .onDisappear {
+            cancelClickNavigation()
             if isHovering {
                 NSCursor.pop()
                 isHovering = false
@@ -447,12 +468,20 @@ struct DateTickerView: View {
             visualRotation: visualRotation,
             todayDayOffset: -appState.currentDayOffsetFromToday
         )
-
-        ForEach(offsets, id: \.self) { offset in
-            if let dateKey = appState.dateKey(
+        let placements = offsets.compactMap { offset -> DateTickerFacePlacement? in
+            guard let dateKey = appState.dateKey(
                 byAddingDays: offset,
                 to: appState.currentDateKey
-            ), let content = appState.tickerFaceContent(for: dateKey) {
+            ) else {
+                return nil
+            }
+            return DateTickerFacePlacement(id: dateKey, offset: offset)
+        }
+
+        ForEach(placements) { placement in
+            let dateKey = placement.id
+            let offset = placement.offset
+            if let content = appState.tickerFaceContent(for: dateKey) {
                 let isToday = dateKey == appState.todayDateKey
                 let projection = DateTickerLayout.projection(
                     forDayOffset: offset,
@@ -719,6 +748,11 @@ struct DateTickerView: View {
                     NSCursor.closedHand.set()
                 }
             }
+            .onChanged { value in
+                if abs(value.translation.width) > 2 {
+                    cancelClickNavigation()
+                }
+            }
             .onEnded { value in
                 if isHovering {
                     NSCursor.openHand.set()
@@ -766,7 +800,7 @@ struct DateTickerView: View {
             return
         }
 
-        navigate(
+        animateClickNavigation(
             by: DateTickerLayout.clickedDayOffset(
                 x: x,
                 width: width,
@@ -778,7 +812,63 @@ struct DateTickerView: View {
         )
     }
 
+    private func animateClickNavigation(
+        by days: Int,
+        fromVisualRotation visualRotation: CGFloat
+    ) {
+        cancelClickNavigation()
+
+        guard days != 0,
+              let targetDateKey = appState.dateKey(
+                byAddingDays: days,
+                to: appState.currentDateKey
+              )
+        else {
+            springToRest()
+            return
+        }
+
+        let targetRotation = DateTickerLayout.clickTargetRotation(
+            navigatingBy: days
+        )
+        let duration = DateTickerLayout.clickAnimationDuration(
+            navigatingBy: days
+        )
+        let animationID = UUID()
+        clickAnimationID = animationID
+
+        clickNavigationTask = Task { @MainActor in
+            let startTime = ProcessInfo.processInfo.systemUptime
+
+            while !Task.isCancelled {
+                let elapsed = ProcessInfo.processInfo.systemUptime - startTime
+                let progress = min(max(elapsed / duration, 0), 1)
+                settleRotation = visualRotation
+                    + (targetRotation - visualRotation) * CGFloat(progress)
+
+                if progress >= 1 {
+                    break
+                }
+                try? await Task.sleep(nanoseconds: 8_333_333)
+            }
+
+            guard !Task.isCancelled, clickAnimationID == animationID else {
+                return
+            }
+
+            var transaction = Transaction(animation: nil)
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                appState.openDate(targetDateKey)
+                settleRotation = 0
+            }
+            clickAnimationID = nil
+            clickNavigationTask = nil
+        }
+    }
+
     private func navigate(by days: Int, fromVisualRotation visualRotation: CGFloat) {
+        cancelClickNavigation()
         guard days != 0,
               let targetDateKey = appState.dateKey(
                 byAddingDays: days,
@@ -809,6 +899,12 @@ struct DateTickerView: View {
         withAnimation(.spring(response: 0.34, dampingFraction: 0.84)) {
             settleRotation = 0
         }
+    }
+
+    private func cancelClickNavigation() {
+        clickNavigationTask?.cancel()
+        clickNavigationTask = nil
+        clickAnimationID = nil
     }
 }
 

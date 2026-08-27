@@ -183,6 +183,29 @@ final class DateTickerTests: XCTestCase {
         XCTAssertLessThan(next.opacity, 1)
     }
 
+    func testSettledDialShowsOnlyTwoReadableFacesOnEachSide() {
+        for density in [DateTickerDensity.fullFaces, .numbersOnly] {
+            let offsets = DateTickerLayout.visibleDayOffsets(
+                tickerWidth: DateTickerLayout.maximumWidth,
+                density: density,
+                visualRotation: 0
+            )
+
+            XCTAssertEqual(offsets, [-2, -1, 0, 1, 2])
+        }
+    }
+
+    func testNextRimFaceEntersContinuouslyDuringRotation() {
+        let offsets = DateTickerLayout.visibleDayOffsets(
+            tickerWidth: DateTickerLayout.maximumWidth,
+            density: .fullFaces,
+            visualRotation: 10
+        )
+
+        XCTAssertTrue(offsets.contains(3))
+        XCTAssertFalse(offsets.contains(-3))
+    }
+
     func testDragSnapsInTheExpectedDirectionAndCapsFlicks() {
         XCTAssertEqual(
             DateTickerLayout.navigationDelta(translation: -43, predictedTranslation: -43),
@@ -301,6 +324,64 @@ final class DateTickerTests: XCTestCase {
             DateTickerLayout.preservedRotation(visualRotation: 20, navigatingBy: 1),
             0
         )
+    }
+
+    func testClickNavigationRotatesAtAConstantAngularSpeed() {
+        XCTAssertEqual(
+            DateTickerLayout.clickTargetRotation(navigatingBy: 1),
+            20
+        )
+        XCTAssertEqual(
+            DateTickerLayout.clickTargetRotation(navigatingBy: -3),
+            -60
+        )
+        XCTAssertEqual(
+            DateTickerLayout.clickAnimationDuration(navigatingBy: 1),
+            0.14,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            DateTickerLayout.clickAnimationDuration(navigatingBy: 3),
+            0.42,
+            accuracy: 0.001
+        )
+
+        let oneDaySpeed = abs(
+            DateTickerLayout.clickTargetRotation(navigatingBy: 1)
+        ) / DateTickerLayout.clickAnimationDuration(navigatingBy: 1)
+        let threeDaySpeed = abs(
+            DateTickerLayout.clickTargetRotation(navigatingBy: 3)
+        ) / DateTickerLayout.clickAnimationDuration(navigatingBy: 3)
+        XCTAssertEqual(oneDaySpeed, threeDaySpeed, accuracy: 0.001)
+    }
+
+    func testTickerFaceIdentityFollowsItsDateAcrossNavigationCommit() {
+        let targetBeforeCommit = DateTickerFacePlacement(
+            id: "2026-08-26",
+            offset: 1
+        )
+        let targetAfterCommit = DateTickerFacePlacement(
+            id: "2026-08-26",
+            offset: 0
+        )
+
+        XCTAssertEqual(targetBeforeCommit.id, targetAfterCommit.id)
+        XCTAssertNotEqual(targetBeforeCommit.offset, targetAfterCommit.offset)
+
+        let beforeProjection = DateTickerLayout.projection(
+            forDayOffset: targetBeforeCommit.offset,
+            visualRotation: DateTickerLayout.clickTargetRotation(navigatingBy: 1),
+            tickerWidth: 184,
+            density: .numbersOnly
+        )
+        let afterProjection = DateTickerLayout.projection(
+            forDayOffset: targetAfterCommit.offset,
+            visualRotation: 0,
+            tickerWidth: 184,
+            density: .numbersOnly
+        )
+        XCTAssertEqual(beforeProjection.x, afterProjection.x, accuracy: 0.001)
+        XCTAssertEqual(beforeProjection.scaleX, afterProjection.scaleX, accuracy: 0.001)
     }
 
     func testTodayStaysOnTheRimUntilReachingTheHandoffAngle() {
