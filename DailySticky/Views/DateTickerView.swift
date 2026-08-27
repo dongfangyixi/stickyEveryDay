@@ -310,7 +310,6 @@ struct DateTickerTheme {
     let bandTop: Color
     let bandMiddle: Color
     let bandBottom: Color
-    let fade: Color
     let texture: Color
     let rim: Color
     let innerRim: Color
@@ -334,7 +333,6 @@ struct DateTickerTheme {
                 bandTop: Color(red: 243 / 255, green: 231 / 255, blue: 166 / 255),
                 bandMiddle: Color(red: 1, green: 251 / 255, blue: 221 / 255),
                 bandBottom: Color(red: 239 / 255, green: 226 / 255, blue: 160 / 255),
-                fade: Color(red: 252 / 255, green: 247 / 255, blue: 214 / 255),
                 texture: Color(red: 96 / 255, green: 84 / 255, blue: 40 / 255).opacity(0.05),
                 rim: Color(red: 96 / 255, green: 84 / 255, blue: 40 / 255).opacity(0.26),
                 innerRim: Color.white.opacity(0.45),
@@ -356,7 +354,6 @@ struct DateTickerTheme {
                 bandTop: Color(red: 247 / 255, green: 245 / 255, blue: 236 / 255),
                 bandMiddle: .white,
                 bandBottom: Color(red: 239 / 255, green: 235 / 255, blue: 223 / 255),
-                fade: Color(red: 245 / 255, green: 242 / 255, blue: 232 / 255),
                 texture: Color(red: 60 / 255, green: 56 / 255, blue: 44 / 255).opacity(0.05),
                 rim: Color(red: 40 / 255, green: 38 / 255, blue: 30 / 255).opacity(0.18),
                 innerRim: Color.white.opacity(0.70),
@@ -378,7 +375,6 @@ struct DateTickerTheme {
                 bandTop: Color(red: 23 / 255, green: 20 / 255, blue: 18 / 255),
                 bandMiddle: Color(red: 44 / 255, green: 38 / 255, blue: 34 / 255),
                 bandBottom: Color(red: 20 / 255, green: 17 / 255, blue: 15 / 255),
-                fade: Color(red: 23 / 255, green: 20 / 255, blue: 18 / 255),
                 texture: Color.black.opacity(0.45),
                 rim: Color(red: 11 / 255, green: 10 / 255, blue: 9 / 255),
                 innerRim: Color.white.opacity(0.05),
@@ -674,12 +670,12 @@ struct DateTickerView: View {
     private var edgeVignette: some View {
         LinearGradient(
             stops: [
-                .init(color: tickerTheme.fade.opacity(0.95), location: 0),
-                .init(color: tickerTheme.fade.opacity(0.45), location: 0.08),
-                .init(color: tickerTheme.fade.opacity(0), location: 0.24),
-                .init(color: tickerTheme.fade.opacity(0), location: 0.76),
-                .init(color: tickerTheme.fade.opacity(0.45), location: 0.92),
-                .init(color: tickerTheme.fade.opacity(0.95), location: 1)
+                .init(color: tickerTheme.bar, location: 0),
+                .init(color: tickerTheme.bar.opacity(0.45), location: 0.08),
+                .init(color: tickerTheme.bar.opacity(0), location: 0.24),
+                .init(color: tickerTheme.bar.opacity(0), location: 0.76),
+                .init(color: tickerTheme.bar.opacity(0.45), location: 0.92),
+                .init(color: tickerTheme.bar, location: 1)
             ],
             startPoint: .leading,
             endPoint: .trailing
