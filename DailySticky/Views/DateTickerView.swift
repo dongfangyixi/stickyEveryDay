@@ -27,6 +27,12 @@ struct DateTickerFacePlacement: Identifiable, Equatable {
     let offset: Int
 }
 
+struct DateTickerFlickPlan: Equatable {
+    let days: Int
+    let startRotation: CGFloat
+    let targetRotation: CGFloat
+}
+
 enum DateTickerLayout {
     static let compactHeaderWidth: CGFloat = 400
     static let bandHeight: CGFloat = 40
@@ -42,6 +48,9 @@ enum DateTickerLayout {
     static let maximumFlickDays = 5
     static let todayTabWidth: CGFloat = 34
     static let clickSecondsPerDay = 0.14
+    static let springLambda: CGFloat = 0.18
+    static let springStopThreshold: CGFloat = 0.05
+    static let springFrameNanoseconds: UInt64 = 16_666_667
 
     static func density(forHeaderWidth width: CGFloat) -> DateTickerDensity {
         width <= compactHeaderWidth ? .numbersOnly : .fullFaces
@@ -183,11 +192,41 @@ enum DateTickerLayout {
         translation: CGFloat,
         predictedTranslation: CGFloat
     ) -> Int {
-        let effectiveTranslation = abs(predictedTranslation) > abs(translation)
-            ? predictedTranslation
-            : translation
-        let rawDays = Int((-effectiveTranslation / dragPointsPerDay).rounded())
-        return min(max(rawDays, -maximumFlickDays), maximumFlickDays)
+        flickPlan(
+            baseRotation: 0,
+            translation: translation,
+            predictedTranslation: predictedTranslation
+        ).days
+    }
+
+    static func flickPlan(
+        baseRotation: CGFloat,
+        translation: CGFloat,
+        predictedTranslation: CGFloat
+    ) -> DateTickerFlickPlan {
+        let startRotation = baseRotation
+            + rotation(forDragTranslation: translation)
+        let projectedRotation = baseRotation
+            + rotation(forDragTranslation: predictedTranslation)
+        let currentFace = Int((startRotation / anglePerDay).rounded())
+        let projectedFace = Int((projectedRotation / anglePerDay).rounded())
+        let days = min(
+            max(projectedFace, currentFace - maximumFlickDays),
+            currentFace + maximumFlickDays
+        )
+
+        return DateTickerFlickPlan(
+            days: days,
+            startRotation: startRotation,
+            targetRotation: CGFloat(days) * anglePerDay
+        )
+    }
+
+    static func springStep(
+        rotation: CGFloat,
+        targetRotation: CGFloat
+    ) -> CGFloat {
+        rotation + (targetRotation - rotation) * springLambda
     }
 
     static func preservedRotation(
@@ -358,8 +397,8 @@ struct DateTickerView: View {
 
     @GestureState private var dragTranslation: CGFloat = 0
     @State private var settleRotation: CGFloat = 0
-    @State private var clickNavigationTask: Task<Void, Never>?
-    @State private var clickAnimationID: UUID?
+    @State private var navigationTask: Task<Void, Never>?
+    @State private var navigationAnimationID: UUID?
     @State private var isHovering = false
     @State private var isHoveringTodayTab = false
 
@@ -447,7 +486,7 @@ struct DateTickerView: View {
         .frame(minWidth: DateTickerLayout.minimumWidth)
         .frame(height: DateTickerLayout.bandHeight)
         .onDisappear {
-            cancelClickNavigation()
+            cancelNavigationAnimation()
             if isHovering {
                 NSCursor.pop()
                 isHovering = false
@@ -750,7 +789,7 @@ struct DateTickerView: View {
             }
             .onChanged { value in
                 if abs(value.translation.width) > 2 {
-                    cancelClickNavigation()
+                    cancelNavigationAnimation()
                 }
             }
             .onEnded { value in
@@ -771,11 +810,12 @@ struct DateTickerView: View {
                     return
                 }
 
-                let delta = DateTickerLayout.navigationDelta(
+                let plan = DateTickerLayout.flickPlan(
+                    baseRotation: settleRotation,
                     translation: value.translation.width,
                     predictedTranslation: value.predictedEndTranslation.width
                 )
-                navigate(by: delta, fromVisualRotation: endRotation)
+                animateFlickNavigation(plan)
             }
     }
 
@@ -816,7 +856,7 @@ struct DateTickerView: View {
         by days: Int,
         fromVisualRotation visualRotation: CGFloat
     ) {
-        cancelClickNavigation()
+        cancelNavigationAnimation()
 
         guard days != 0,
               let targetDateKey = appState.dateKey(
@@ -835,9 +875,9 @@ struct DateTickerView: View {
             navigatingBy: days
         )
         let animationID = UUID()
-        clickAnimationID = animationID
+        navigationAnimationID = animationID
 
-        clickNavigationTask = Task { @MainActor in
+        navigationTask = Task { @MainActor in
             let startTime = ProcessInfo.processInfo.systemUptime
 
             while !Task.isCancelled {
@@ -852,7 +892,7 @@ struct DateTickerView: View {
                 try? await Task.sleep(nanoseconds: 8_333_333)
             }
 
-            guard !Task.isCancelled, clickAnimationID == animationID else {
+            guard !Task.isCancelled, navigationAnimationID == animationID else {
                 return
             }
 
@@ -862,13 +902,73 @@ struct DateTickerView: View {
                 appState.openDate(targetDateKey)
                 settleRotation = 0
             }
-            clickAnimationID = nil
-            clickNavigationTask = nil
+            navigationAnimationID = nil
+            navigationTask = nil
+        }
+    }
+
+    private func animateFlickNavigation(_ plan: DateTickerFlickPlan) {
+        cancelNavigationAnimation()
+
+        let targetDateKey: String?
+        if plan.days == 0 {
+            targetDateKey = appState.currentDateKey
+        } else {
+            targetDateKey = appState.dateKey(
+                byAddingDays: plan.days,
+                to: appState.currentDateKey
+            )
+        }
+
+        guard let targetDateKey else {
+            springToRest()
+            return
+        }
+
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            settleRotation = plan.startRotation
+        }
+
+        let animationID = UUID()
+        navigationAnimationID = animationID
+        navigationTask = Task { @MainActor in
+            var rotation = plan.startRotation
+
+            while !Task.isCancelled,
+                  abs(plan.targetRotation - rotation)
+                    > DateTickerLayout.springStopThreshold {
+                rotation = DateTickerLayout.springStep(
+                    rotation: rotation,
+                    targetRotation: plan.targetRotation
+                )
+                settleRotation = rotation
+                try? await Task.sleep(
+                    nanoseconds: DateTickerLayout.springFrameNanoseconds
+                )
+            }
+
+            guard !Task.isCancelled,
+                  navigationAnimationID == animationID else {
+                return
+            }
+
+            var completionTransaction = Transaction(animation: nil)
+            completionTransaction.disablesAnimations = true
+            withTransaction(completionTransaction) {
+                if plan.days != 0 {
+                    appState.openDate(targetDateKey)
+                }
+                settleRotation = 0
+            }
+            navigationAnimationID = nil
+            navigationTask = nil
         }
     }
 
     private func navigate(by days: Int, fromVisualRotation visualRotation: CGFloat) {
-        cancelClickNavigation()
+        cancelNavigationAnimation()
         guard days != 0,
               let targetDateKey = appState.dateKey(
                 byAddingDays: days,
@@ -901,10 +1001,10 @@ struct DateTickerView: View {
         }
     }
 
-    private func cancelClickNavigation() {
-        clickNavigationTask?.cancel()
-        clickNavigationTask = nil
-        clickAnimationID = nil
+    private func cancelNavigationAnimation() {
+        navigationTask?.cancel()
+        navigationTask = nil
+        navigationAnimationID = nil
     }
 }
 

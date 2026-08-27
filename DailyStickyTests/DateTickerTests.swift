@@ -223,6 +223,53 @@ final class DateTickerTests: XCTestCase {
             DateTickerLayout.navigationDelta(translation: 10, predictedTranslation: 500),
             -5
         )
+        XCTAssertEqual(
+            DateTickerLayout.navigationDelta(translation: -440, predictedTranslation: -440),
+            10
+        )
+        XCTAssertEqual(
+            DateTickerLayout.navigationDelta(translation: -440, predictedTranslation: -1_000),
+            15
+        )
+        XCTAssertEqual(
+            DateTickerLayout.navigationDelta(translation: -220, predictedTranslation: -88),
+            2
+        )
+    }
+
+    func testFastFlickLandsBeforeCommittingItsDate() {
+        let plan = DateTickerLayout.flickPlan(
+            baseRotation: 0,
+            translation: -10,
+            predictedTranslation: -500
+        )
+
+        XCTAssertEqual(plan.days, 5)
+        XCTAssertEqual(plan.startRotation, CGFloat(50) / 11, accuracy: 0.001)
+        XCTAssertEqual(plan.targetRotation, 100, accuracy: 0.001)
+
+        let firstFrame = DateTickerLayout.springStep(
+            rotation: plan.startRotation,
+            targetRotation: plan.targetRotation
+        )
+        XCTAssertGreaterThan(firstFrame, plan.startRotation)
+        XCTAssertLessThan(firstFrame, plan.targetRotation)
+
+        let beforeCommit = DateTickerLayout.projection(
+            forDayOffset: plan.days,
+            visualRotation: plan.targetRotation,
+            tickerWidth: 184,
+            density: .numbersOnly
+        )
+        let afterCommit = DateTickerLayout.projection(
+            forDayOffset: 0,
+            visualRotation: 0,
+            tickerWidth: 184,
+            density: .numbersOnly
+        )
+
+        XCTAssertEqual(beforeCommit.x, afterCommit.x, accuracy: 0.001)
+        XCTAssertEqual(beforeCommit.scaleX, afterCommit.scaleX, accuracy: 0.001)
     }
 
     func testClickMapsToTheNearestTickerFace() {
