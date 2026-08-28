@@ -77,6 +77,33 @@ final class DateTickerTests: XCTestCase {
         )
     }
 
+    func testRecessedDrumKeepsACompactHousingAndTrueFacePerspective() {
+        XCTAssertEqual(DateTickerLayout.bandHeight, 40)
+        XCTAssertEqual(DateTickerLayout.apertureHeight, 36)
+        XCTAssertEqual(DateTickerLayout.apertureCornerRadius, 7)
+        XCTAssertLessThan(
+            DateTickerLayout.apertureHeight,
+            DateTickerLayout.bandHeight
+        )
+        XCTAssertEqual(DateTickerLayout.facePerspective, 0.32)
+
+        let center = DateTickerLayout.projection(
+            forDayOffset: 0,
+            visualRotation: 0,
+            tickerWidth: DateTickerLayout.fixedWidth,
+            density: .numbersOnly
+        )
+        let outer = DateTickerLayout.projection(
+            forDayOffset: 2,
+            visualRotation: 0,
+            tickerWidth: DateTickerLayout.fixedWidth,
+            density: .numbersOnly
+        )
+
+        XCTAssertLessThan(outer.scaleY, center.scaleY)
+        XCTAssertLessThan(outer.opacity, center.opacity)
+    }
+
     func testDenseModeExpandsOnlyTheSelectedFace() {
         XCTAssertFalse(
             DateTickerLayout.usesFullLabel(

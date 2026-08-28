@@ -36,6 +36,8 @@ struct DateTickerFlickPlan: Equatable {
 enum DateTickerLayout {
     static let compactHeaderWidth: CGFloat = 400
     static let bandHeight: CGFloat = 40
+    static let apertureHeight: CGFloat = 36
+    static let apertureCornerRadius: CGFloat = 7
     static let fixedWidth: CGFloat = 184
     static let density: DateTickerDensity = .numbersOnly
     static let fullFacePitch: CGFloat = 92
@@ -43,6 +45,7 @@ enum DateTickerLayout {
     static let anglePerDay: CGFloat = 20
     static let dragPointsPerDay: CGFloat = 44
     static let perspective: CGFloat = 300
+    static let facePerspective: CGFloat = 0.32
     static let maximumFaceAngle: CGFloat = 74
     static let maximumReadableFaceAngle: CGFloat = 60
     static let maximumFlickDays = 5
@@ -114,7 +117,7 @@ enum DateTickerLayout {
         return DateTickerProjection(
             x: x,
             scaleX: max(0.05, cosine * depthScale),
-            scaleY: depthScale,
+            scaleY: max(0.72, pow(depthScale, 1.45)),
             opacity: isVisible ? max(0, pow(cosine, 1.5)) : 0,
             blurRadius: absoluteAngle > 55 ? (absoluteAngle - 55) / 14 : 0,
             angle: angle,
@@ -417,31 +420,53 @@ struct DateTickerView: View {
             )
 
             ZStack {
-                tickerBackground
+                tickerTheme.bar
 
-                tickerFaces(
-                    width: width,
-                    visualRotation: currentRotation,
-                    todayEdge: todayEdge
+                ZStack {
+                    tickerBackground
+
+                    tickerFaces(
+                        width: width,
+                        visualRotation: currentRotation,
+                        todayEdge: todayEdge
+                    )
+
+                    centerGlassHighlight
+
+                    edgeShading
+
+                    specularHighlight
+
+                    edgeVignette
+
+                    if todayEdge != .none {
+                        todayTab(edge: todayEdge)
+                            .position(
+                                x: todayEdge == .leading
+                                    ? DateTickerLayout.todayTabWidth / 2
+                                    : width - DateTickerLayout.todayTabWidth / 2,
+                                y: DateTickerLayout.apertureHeight / 2
+                            )
+                    }
+                }
+                .frame(height: DateTickerLayout.apertureHeight)
+                .clipShape(
+                    RoundedRectangle(
+                        cornerRadius: DateTickerLayout.apertureCornerRadius,
+                        style: .continuous
+                    )
                 )
 
-                edgeShading
+                housingLips
 
-                specularHighlight
-
-                edgeVignette
-
-                if todayEdge != .none {
-                    todayTab(edge: todayEdge)
-                        .position(
-                            x: todayEdge == .leading
-                                ? DateTickerLayout.todayTabWidth / 2
-                                : width - DateTickerLayout.todayTabWidth / 2,
-                            y: DateTickerLayout.bandHeight / 2
-                        )
-                }
+                centerIndex
             }
-            .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+            .clipShape(
+                RoundedRectangle(
+                    cornerRadius: DateTickerLayout.apertureCornerRadius,
+                    style: .continuous
+                )
+            )
             .contentShape(Rectangle())
             .gesture(tickerGesture(width: width, todayEdge: todayEdge))
             .focusable()
@@ -532,16 +557,22 @@ struct DateTickerView: View {
                             density: density,
                             isSelected: isSelected
                         ),
-                        height: DateTickerLayout.bandHeight
+                        height: DateTickerLayout.apertureHeight
                     )
                     .scaleEffect(
-                        x: projection.scaleX,
+                        x: projection.scaleY,
                         y: projection.scaleY,
                         anchor: .center
                     )
+                    .rotation3DEffect(
+                        .degrees(projection.angle),
+                        axis: (x: 0, y: 1, z: 0),
+                        anchor: .center,
+                        perspective: DateTickerLayout.facePerspective
+                    )
                     .position(
                         x: width / 2 + projection.x,
-                        y: DateTickerLayout.bandHeight / 2
+                        y: DateTickerLayout.apertureHeight / 2
                     )
                     .opacity(
                         projection.opacity * DateTickerLayout.edgeFaceAttenuation(
@@ -560,7 +591,10 @@ struct DateTickerView: View {
     }
 
     private var tickerBackground: some View {
-        RoundedRectangle(cornerRadius: 5, style: .continuous)
+        RoundedRectangle(
+            cornerRadius: DateTickerLayout.apertureCornerRadius,
+            style: .continuous
+        )
             .fill(
                 LinearGradient(
                     stops: [
@@ -574,51 +608,123 @@ struct DateTickerView: View {
             )
             .overlay {
                 Canvas { context, size in
-                    var lines = Path()
+                    var contours = Path()
+
+                    contours.move(to: CGPoint(x: 0, y: 7))
+                    contours.addCurve(
+                        to: CGPoint(x: size.width, y: 7),
+                        control1: CGPoint(x: size.width * 0.28, y: 1.5),
+                        control2: CGPoint(x: size.width * 0.72, y: 1.5)
+                    )
+                    contours.move(to: CGPoint(x: 0, y: size.height - 7))
+                    contours.addCurve(
+                        to: CGPoint(x: size.width, y: size.height - 7),
+                        control1: CGPoint(x: size.width * 0.28, y: size.height - 1.5),
+                        control2: CGPoint(x: size.width * 0.72, y: size.height - 1.5)
+                    )
+                    context.stroke(
+                        contours,
+                        with: .color(tickerTheme.line.opacity(0.55)),
+                        lineWidth: 1
+                    )
+
                     if tickerTheme.usesVerticalGrooves {
+                        var grooves = Path()
                         stride(from: CGFloat(0), through: size.width, by: 12).forEach { x in
-                            lines.move(to: CGPoint(x: x, y: 0))
-                            lines.addLine(to: CGPoint(x: x, y: size.height))
+                            grooves.move(to: CGPoint(x: x, y: 5))
+                            grooves.addLine(to: CGPoint(x: x, y: size.height - 5))
                         }
-                    } else {
-                        stride(from: CGFloat(0), through: size.height, by: 3).forEach { y in
-                            lines.move(to: CGPoint(x: 0, y: y))
-                            lines.addLine(to: CGPoint(x: size.width, y: y))
-                        }
+                        context.stroke(
+                            grooves,
+                            with: .color(tickerTheme.texture.opacity(0.42)),
+                            lineWidth: 0.5
+                        )
                     }
-                    context.stroke(lines, with: .color(tickerTheme.texture), lineWidth: 1)
                 }
-                .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
             }
-            .overlay {
-                VStack(spacing: 0) {
-                    LinearGradient(
-                        colors: [tickerTheme.lipShadow, .clear],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                    .frame(height: appState.themePalette.kind == .dark ? 8 : 4)
+    }
 
-                    Spacer(minLength: 0)
-
-                    LinearGradient(
-                        colors: [.clear, tickerTheme.lipShadow],
-                        startPoint: .top,
-                        endPoint: .bottom
+    private var centerGlassHighlight: some View {
+        GeometryReader { proxy in
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(
+                    RadialGradient(
+                        colors: [
+                            tickerTheme.specularHighlight.opacity(0.20),
+                            tickerTheme.specularHighlight.opacity(0.05),
+                            .clear
+                        ],
+                        center: .center,
+                        startRadius: 0,
+                        endRadius: 54
                     )
-                    .frame(height: appState.themePalette.kind == .dark ? 8 : 4)
-                }
-                .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                )
+                .frame(width: 76, height: proxy.size.height - 2)
+                .position(x: proxy.size.width / 2, y: proxy.size.height / 2)
+        }
+        .allowsHitTesting(false)
+    }
+
+    private var housingLips: some View {
+        VStack(spacing: 0) {
+            LinearGradient(
+                colors: [
+                    tickerTheme.bar,
+                    tickerTheme.lipShadow.opacity(0.72),
+                    .clear
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .frame(height: 6)
+
+            Spacer(minLength: 0)
+
+            LinearGradient(
+                colors: [
+                    .clear,
+                    tickerTheme.lipShadow.opacity(0.72),
+                    tickerTheme.bar
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .frame(height: 6)
+        }
+        .overlay {
+            VStack(spacing: 0) {
+                Rectangle()
+                    .fill(tickerTheme.rim.opacity(0.78))
+                    .frame(height: 1)
+                Spacer(minLength: 0)
+                Rectangle()
+                    .fill(tickerTheme.rim.opacity(0.78))
+                    .frame(height: 1)
             }
-            .overlay {
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .inset(by: 1)
-                    .stroke(tickerTheme.innerRim, lineWidth: 1)
-            }
-            .overlay {
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .stroke(tickerTheme.rim, lineWidth: 1)
-            }
+        }
+        .overlay {
+            RoundedRectangle(
+                cornerRadius: DateTickerLayout.apertureCornerRadius,
+                style: .continuous
+            )
+            .inset(by: 1)
+            .stroke(tickerTheme.innerRim.opacity(0.72), lineWidth: 1)
+        }
+        .allowsHitTesting(false)
+    }
+
+    private var centerIndex: some View {
+        VStack(spacing: 0) {
+            Capsule()
+                .fill(tickerTheme.accent.opacity(0.52))
+                .frame(width: 10, height: 1.5)
+            Spacer(minLength: 0)
+            Capsule()
+                .fill(tickerTheme.accent.opacity(0.52))
+                .frame(width: 10, height: 1.5)
+        }
+        .padding(.vertical, 2.5)
+        .allowsHitTesting(false)
     }
 
     private var edgeShading: some View {
@@ -652,11 +758,11 @@ struct DateTickerView: View {
                 )
                 .frame(
                     width: proxy.size.width * 0.64,
-                    height: DateTickerLayout.bandHeight * 0.34
+                    height: DateTickerLayout.apertureHeight * 0.34
                 )
                 .position(
                     x: proxy.size.width / 2,
-                    y: 3 + DateTickerLayout.bandHeight * 0.17
+                    y: 2 + DateTickerLayout.apertureHeight * 0.17
                 )
         }
         .allowsHitTesting(false)
@@ -675,7 +781,12 @@ struct DateTickerView: View {
             startPoint: .leading,
             endPoint: .trailing
         )
-        .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+        .clipShape(
+            RoundedRectangle(
+                cornerRadius: DateTickerLayout.apertureCornerRadius,
+                style: .continuous
+            )
+        )
         .allowsHitTesting(false)
     }
 
@@ -747,7 +858,7 @@ struct DateTickerView: View {
                 ))
         }
         .foregroundStyle(tickerTheme.accent)
-        .frame(width: DateTickerLayout.todayTabWidth, height: DateTickerLayout.bandHeight)
+        .frame(width: DateTickerLayout.todayTabWidth, height: DateTickerLayout.apertureHeight)
         .background(
             LinearGradient(
                 colors: [
