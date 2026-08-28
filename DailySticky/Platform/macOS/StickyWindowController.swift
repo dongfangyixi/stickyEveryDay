@@ -3,6 +3,8 @@ import Combine
 import SwiftUI
 
 final class StickyWindow: NSWindow {
+    static let nativeResizeEdgeInset: CGFloat = 8
+
     override init(
         contentRect: NSRect,
         styleMask style: NSWindow.StyleMask,
@@ -29,6 +31,7 @@ final class StickyWindow: NSWindow {
 
     override func sendEvent(_ event: NSEvent) {
         if event.type == .leftMouseDown,
+           !isInsideNativeResizeRegion(event.locationInWindow),
            let contentView,
            let hitView = contentView.hitTest(event.locationInWindow),
            hitView.isInsideWindowDragRegion {
@@ -39,6 +42,19 @@ final class StickyWindow: NSWindow {
         }
 
         super.sendEvent(event)
+    }
+
+    func isInsideNativeResizeRegion(_ point: NSPoint) -> Bool {
+        guard styleMask.contains(.resizable) else {
+            return false
+        }
+
+        let windowBounds = NSRect(origin: .zero, size: frame.size)
+        let interior = windowBounds.insetBy(
+            dx: Self.nativeResizeEdgeInset,
+            dy: Self.nativeResizeEdgeInset
+        )
+        return !interior.contains(point)
     }
 }
 

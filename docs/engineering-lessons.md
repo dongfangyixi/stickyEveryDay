@@ -21,6 +21,7 @@ For the sticky note window, native AppKit resize behavior is the source of truth
 - Do not call `setFrame` during a user drag for hover/cursor fixes.
 - If the bug is edge hover feedback, only update cursor/hover affordance.
 - Keep `isMovableByWindowBackground` interactions in mind: a missed resize edge can become a window move.
+- Native resize edges take precedence over custom header drag regions. `StickyWindow` reserves an 8-point perimeter for AppKit before considering `WindowDragNSView`; never dispatch `performDrag` from that perimeter.
 
 ## Verify The Running App
 

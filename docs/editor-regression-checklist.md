@@ -69,6 +69,6 @@ Run the automated test suite before every editor release. Then verify this check
 
 ## Window And Themes
 
-- Resize from every edge and corner at minimum and large window sizes; confirm the window never moves or trembles.
+- Resize from every edge and corner at minimum and large window sizes; confirm the window never moves or trembles. At both top corners, a resize cursor must always resize, never move the window.
 - Check header controls, cursors, selection, switches, buttons, and scrollbars in Yellow, Light, and Dark themes, both focused and unfocused.
 - Restart the app and confirm editor layout, images, selection targets, window size, and local/iCloud content remain correct.

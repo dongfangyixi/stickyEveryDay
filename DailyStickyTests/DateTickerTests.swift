@@ -26,6 +26,43 @@ final class DateTickerTests: XCTestCase {
         XCTAssertTrue(dragRegion.isInsideWindowDragRegion)
     }
 
+    func testStickyWindowReservesEveryNativeResizeEdgeBeforeHeaderDragging() {
+        let window = StickyWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 320),
+            styleMask: [.titled, .resizable, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+
+        let near = StickyWindow.nativeResizeEdgeInset - 1
+        let beyond = StickyWindow.nativeResizeEdgeInset + 1
+
+        for point in [
+            NSPoint(x: near, y: near),
+            NSPoint(x: 560 - near, y: near),
+            NSPoint(x: near, y: 320 - near),
+            NSPoint(x: 560 - near, y: 320 - near),
+            NSPoint(x: 280, y: near),
+            NSPoint(x: 280, y: 320 - near),
+            NSPoint(x: near, y: 160),
+            NSPoint(x: 560 - near, y: 160)
+        ] {
+            XCTAssertTrue(
+                window.isInsideNativeResizeRegion(point),
+                "AppKit must own resizing at \(point)"
+            )
+        }
+
+        XCTAssertFalse(
+            window.isInsideNativeResizeRegion(
+                NSPoint(x: beyond, y: 320 - beyond)
+            )
+        )
+        XCTAssertFalse(
+            window.isInsideNativeResizeRegion(NSPoint(x: 280, y: 280))
+        )
+    }
+
     func testTickerAlwaysUsesDenseFacesAtEveryHeaderWidth() {
         XCTAssertEqual(DateTickerLayout.density, .numbersOnly)
     }
