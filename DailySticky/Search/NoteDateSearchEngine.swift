@@ -18,6 +18,7 @@ struct NoteDateSearchEngine {
         locale: Locale
     ) {
         let formatters = Self.formatters(for: locale)
+        let componentFormatters = Self.componentFormatters(for: locale)
         monthEngine.rebuild(with: Self.monthDocuments(for: locale))
         snippetByDateKey = Dictionary(
             uniqueKeysWithValues: documents.map { document in
@@ -33,7 +34,12 @@ struct NoteDateSearchEngine {
             return IndexedDate(
                 document: NoteSearchDocument(
                     dateKey: document.dateKey,
-                    text: Self.aliases(for: date, dateKey: document.dateKey, formatters: formatters)
+                    text: Self.aliases(
+                        for: date,
+                        dateKey: document.dateKey,
+                        formatters: formatters,
+                        componentFormatters: componentFormatters
+                    )
                         .joined(separator: "\n"),
                     updatedAt: document.updatedAt
                 ),
@@ -111,11 +117,41 @@ struct NoteDateSearchEngine {
     private static func aliases(
         for date: Date,
         dateKey: String,
-        formatters: [DateFormatter]
+        formatters: [DateFormatter],
+        componentFormatters: [DateFormatter]
     ) -> [String] {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let components = calendar.dateComponents([.year, .day], from: date)
+        let componentAliases = componentFormatters.flatMap { formatter -> [String] in
+            guard let year = components.year, let day = components.day else {
+                return []
+            }
+            let month = formatter.string(from: date)
+            return [
+                "\(month) \(day)",
+                "\(day) \(month)",
+                "\(month) \(day) \(year)",
+                "\(day) \(month) \(year)"
+            ]
+        }
         var seen = Set<String>()
-        return ([dateKey] + formatters.map { $0.string(from: date) }).filter {
+        return ([dateKey] + formatters.map { $0.string(from: date) } + componentAliases).filter {
             seen.insert($0).inserted
+        }
+    }
+
+    private static func componentFormatters(for locale: Locale) -> [DateFormatter] {
+        ["MMM", "MMMM"].map { template in
+            let formatter = DateFormatter()
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.locale = locale
+            calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+            formatter.calendar = calendar
+            formatter.locale = normalizedLocale(locale)
+            formatter.timeZone = calendar.timeZone
+            formatter.setLocalizedDateFormatFromTemplate(template)
+            return formatter
         }
     }
 

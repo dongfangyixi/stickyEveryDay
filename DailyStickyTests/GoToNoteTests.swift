@@ -14,10 +14,37 @@ final class GoToNoteTests: XCTestCase {
             locale: Locale(identifier: "en_US")
         )
 
-        let results = engine.search("Aug 1")
+        let monthFirstResults = engine.search("Aug 1")
+        let dayFirstResults = engine.search("1 Aug")
 
-        XCTAssertEqual(results.map(\.dateKey), ["2026-08-01", "2025-08-01"])
-        XCTAssertTrue(results.allSatisfy { $0.kind == .date })
+        XCTAssertEqual(monthFirstResults.map(\.dateKey), ["2026-08-01", "2025-08-01"])
+        XCTAssertEqual(dayFirstResults.map(\.dateKey), monthFirstResults.map(\.dateKey))
+        XCTAssertTrue(dayFirstResults.allSatisfy { $0.kind == .date })
+    }
+
+    func testDateLookupAcceptsEitherComponentOrderWithAYear() {
+        var engine = NoteDateSearchEngine()
+        engine.rebuild(
+            with: [
+                document("2025-08-25", "older plan"),
+                document("2026-08-25", "current plan")
+            ],
+            locale: Locale(identifier: "en_US")
+        )
+
+        XCTAssertEqual(engine.search("Aug 25 2026").first?.dateKey, "2026-08-25")
+        XCTAssertEqual(engine.search("25 Aug 2026").first?.dateKey, "2026-08-25")
+    }
+
+    func testLocalizedDateLookupDoesNotRequireTheLocaleDisplayOrder() {
+        var engine = NoteDateSearchEngine()
+        engine.rebuild(
+            with: [document("2026-08-25", "plan")],
+            locale: Locale(identifier: "fr_FR")
+        )
+
+        XCTAssertEqual(engine.search("août 25").first?.dateKey, "2026-08-25")
+        XCTAssertEqual(engine.search("25 août").first?.dateKey, "2026-08-25")
     }
 
     func testDateLookupUsesChineseAndJapaneseLocalizedForms() {
