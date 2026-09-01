@@ -52,6 +52,7 @@
 		A10000000000000000000031 /* SearchQueryField.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000035 /* SearchQueryField.swift */; };
 		A10000000000000000000032 /* NoteDateSearchEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000036 /* NoteDateSearchEngine.swift */; };
 		A10000000000000000000033 /* DateTickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000037 /* DateTickerView.swift */; };
+		A10000000000000000000034 /* AppDataMigration.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000038 /* AppDataMigration.swift */; };
 		B10000000000000000000001 /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = B20000000000000000000001 /* Markdown */; };
 		C10000000000000000000001 /* CheckboxInteractionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000001 /* CheckboxInteractionTests.swift */; };
 		C10000000000000000000002 /* NoteSearchEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000003 /* NoteSearchEngineTests.swift */; };
@@ -62,6 +63,7 @@
 		C10000000000000000000007 /* CurrentNoteFindTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000008 /* CurrentNoteFindTests.swift */; };
 		C10000000000000000000008 /* GoToNoteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000009 /* GoToNoteTests.swift */; };
 		C10000000000000000000009 /* DateTickerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2000000000000000000000A /* DateTickerTests.swift */; };
+		C1000000000000000000000A /* AppDataMigrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2000000000000000000000B /* AppDataMigrationTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -125,6 +127,7 @@
 		A20000000000000000000035 /* SearchQueryField.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchQueryField.swift; sourceTree = "<group>"; };
 		A20000000000000000000036 /* NoteDateSearchEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteDateSearchEngine.swift; sourceTree = "<group>"; };
 		A20000000000000000000037 /* DateTickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DateTickerView.swift; sourceTree = "<group>"; };
+		A20000000000000000000038 /* AppDataMigration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDataMigration.swift; sourceTree = "<group>"; };
 		C20000000000000000000001 /* CheckboxInteractionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CheckboxInteractionTests.swift; sourceTree = "<group>"; };
 		C20000000000000000000002 /* PinadayTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PinadayTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		C20000000000000000000003 /* NoteSearchEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteSearchEngineTests.swift; sourceTree = "<group>"; };
@@ -135,6 +138,7 @@
 		C20000000000000000000008 /* CurrentNoteFindTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CurrentNoteFindTests.swift; sourceTree = "<group>"; };
 		C20000000000000000000009 /* GoToNoteTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoToNoteTests.swift; sourceTree = "<group>"; };
 		C2000000000000000000000A /* DateTickerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DateTickerTests.swift; sourceTree = "<group>"; };
+		C2000000000000000000000B /* AppDataMigrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDataMigrationTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -222,6 +226,7 @@
 			isa = PBXGroup;
 			children = (
 				A20000000000000000000008 /* AppDataStore.swift */,
+				A20000000000000000000038 /* AppDataMigration.swift */,
 				A20000000000000000000009 /* JSONAppDataStore.swift */,
 				A2000000000000000000000A /* StorageError.swift */,
 			);
@@ -338,6 +343,7 @@
 				C20000000000000000000008 /* CurrentNoteFindTests.swift */,
 				C20000000000000000000009 /* GoToNoteTests.swift */,
 				C2000000000000000000000A /* DateTickerTests.swift */,
+				C2000000000000000000000B /* AppDataMigrationTests.swift */,
 			);
 			path = DailyStickyTests;
 			sourceTree = "<group>";
@@ -460,6 +466,7 @@
 				A10000000000000000000007 /* StoredWindowFrame.swift in Sources */,
 				A10000000000000000000008 /* AppDataStore.swift in Sources */,
 				A10000000000000000000009 /* JSONAppDataStore.swift in Sources */,
+				A10000000000000000000034 /* AppDataMigration.swift in Sources */,
 				A1000000000000000000000A /* StorageError.swift in Sources */,
 				A1000000000000000000000B /* AppState.swift in Sources */,
 				A1000000000000000000000C /* DayPageController.swift in Sources */,
@@ -512,6 +519,7 @@
 				C10000000000000000000007 /* CurrentNoteFindTests.swift in Sources */,
 				C10000000000000000000008 /* GoToNoteTests.swift in Sources */,
 				C10000000000000000000009 /* DateTickerTests.swift in Sources */,
+				C1000000000000000000000A /* AppDataMigrationTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -648,7 +656,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 32;
+				CURRENT_PROJECT_VERSION = 35;
 				DEVELOPMENT_TEAM = 8VAH68P422;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -676,7 +684,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 32;
+				CURRENT_PROJECT_VERSION = 35;
 				DEVELOPMENT_TEAM = 8VAH68P422;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;

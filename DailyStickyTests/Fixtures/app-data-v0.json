@@ -1,0 +1,15 @@
+{
+  "pages": {
+    "2026-08-20": {
+      "createdAt": "2026-08-20T08:00:00Z",
+      "dateKey": "2026-08-20",
+      "noteText": "# Legacy note\n- [x] Preserve this task\n中文和日本語 stay intact.\n![Screenshot](attachments/2026-08-20/image-legacy.png)",
+      "updatedAt": "2026-08-20T09:30:00.125Z"
+    }
+  },
+  "settings": {
+    "isPinned": false,
+    "lastOpenedDateKey": "2026-08-20",
+    "windowFrame": null
+  }
+}
