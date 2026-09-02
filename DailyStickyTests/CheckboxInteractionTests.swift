@@ -4,6 +4,43 @@ import XCTest
 
 @MainActor
 final class CheckboxInteractionTests: XCTestCase {
+    func testDateNavigationFocusPolicyTargetsOnlyEmptyDestinationNotes() {
+        XCTAssertTrue(
+            NoteNavigationFocusPolicy.shouldFocusEditor(
+                previousDateKey: "2026-09-01",
+                destinationDateKey: "2026-09-02",
+                noteText: ""
+            )
+        )
+        XCTAssertFalse(
+            NoteNavigationFocusPolicy.shouldFocusEditor(
+                previousDateKey: "2026-09-01",
+                destinationDateKey: "2026-09-02",
+                noteText: "existing note"
+            )
+        )
+        XCTAssertFalse(
+            NoteNavigationFocusPolicy.shouldFocusEditor(
+                previousDateKey: "2026-09-01",
+                destinationDateKey: "2026-09-01",
+                noteText: ""
+            )
+        )
+    }
+
+    func testEmptyNoteFocusPlacesCaretAtStartWithoutFocusingExistingNote() {
+        let (editor, window) = makeEditor()
+        XCTAssertTrue(editor.focusEmptyNoteAtStart())
+        XCTAssertTrue(editor.isTextEditorFirstResponderForTesting)
+        XCTAssertEqual(editor.selectedRangeForTesting, NSRange(location: 0, length: 0))
+
+        editor.setText("existing note")
+        _ = window.makeFirstResponder(nil)
+
+        XCTAssertFalse(editor.focusEmptyNoteAtStart())
+        XCTAssertFalse(editor.isTextEditorFirstResponderForTesting)
+    }
+
     func testSlashNumberedListSplitsCodeBlockWithoutBreakingLowerMouseHits() throws {
         let (editor, _, _, lowerCodeLineIndex) = try makeScrolledSplitCodeBlockEditor()
         XCTAssertTrue(
@@ -1584,6 +1621,36 @@ final class CheckboxInteractionTests: XCTestCase {
 
         XCTAssertEqual(editor.presentationTextForTesting, "1. one more")
         XCTAssertEqual(editor.text, "1. one more")
+    }
+
+    func testTypingNumberedMarkerPromotesToVisibleEmptyNumberedItem() {
+        for marker in ["1. ", "2. ", "24. "] {
+            let (editor, _) = makeEditor()
+
+            for character in marker {
+                editor.typeTextForTesting(String(character))
+            }
+
+            XCTAssertEqual(
+                editor.presentationTextForTesting,
+                marker,
+                "Typing \(marker.debugDescription) must keep its visible numbered marker"
+            )
+            XCTAssertEqual(
+                editor.text,
+                marker,
+                "Typing \(marker.debugDescription) must preserve canonical Markdown"
+            )
+        }
+    }
+
+    func testTypingLetterPeriodSpaceRemainsPlainText() {
+        let (editor, _) = makeEditor()
+
+        editor.typeTextForTesting("x. ")
+
+        XCTAssertEqual(editor.presentationTextForTesting, "x. ")
+        XCTAssertEqual(editor.text, "x. ")
     }
 
     func testBackspaceAtNumberedContentStartRemovesListStructureCleanly() throws {

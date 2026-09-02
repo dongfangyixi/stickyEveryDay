@@ -266,6 +266,16 @@ private enum MarkdownTableCellRenderer {
     }
 }
 
+enum NoteNavigationFocusPolicy {
+    static func shouldFocusEditor(
+        previousDateKey: String,
+        destinationDateKey: String,
+        noteText: String
+    ) -> Bool {
+        previousDateKey != destinationDateKey && noteText.isEmpty
+    }
+}
+
 struct DailyNoteEditorView: View {
     @EnvironmentObject private var appState: AppState
     @ObservedObject var findController: CurrentNoteFindController
@@ -356,7 +366,7 @@ private struct InlineTodoTextEditor: NSViewRepresentable {
     @Binding var text: String
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(text: $text)
+        Coordinator(text: $text, dateKey: dateKey)
     }
 
     func makeNSView(context: Context) -> InlineTodoTextEditorContainer {
@@ -386,7 +396,14 @@ private struct InlineTodoTextEditor: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: InlineTodoTextEditorContainer, context: Context) {
+        let previousDateKey = context.coordinator.dateKey
+        let shouldFocusEmptyNote = NoteNavigationFocusPolicy.shouldFocusEditor(
+            previousDateKey: previousDateKey,
+            destinationDateKey: dateKey,
+            noteText: text
+        )
         context.coordinator.text = $text
+        context.coordinator.dateKey = dateKey
         nsView.setTheme(palette)
         nsView.setLanguage(language)
         nsView.setDateKey(dateKey)
@@ -411,13 +428,26 @@ private struct InlineTodoTextEditor: NSViewRepresentable {
         if nsView.text != text {
             nsView.setText(text)
         }
+
+        if shouldFocusEmptyNote {
+            let coordinator = context.coordinator
+            let destinationDateKey = dateKey
+            DispatchQueue.main.async {
+                guard coordinator.dateKey == destinationDateKey else {
+                    return
+                }
+                nsView.focusEmptyNoteAtStart()
+            }
+        }
     }
 
     final class Coordinator {
         var text: Binding<String>
+        var dateKey: String
 
-        init(text: Binding<String>) {
+        init(text: Binding<String>, dateKey: String) {
             self.text = text
+            self.dateKey = dateKey
         }
     }
 }
@@ -1072,6 +1102,18 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
             lastHandledRevealRequestID = nil
         }
         self.dateKey = dateKey
+    }
+
+    @discardableResult
+    func focusEmptyNoteAtStart() -> Bool {
+        guard textView.string.isEmpty,
+              let window
+        else {
+            return false
+        }
+
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+        return window.makeFirstResponder(textView)
     }
 
     func setNoteZoom(_ noteZoom: Double) {
@@ -2738,7 +2780,6 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
 
         for line in infos {
             let rawLineRange = rawTextRange(for: line, in: nsOriginalText)
-            let rawLine = nsOriginalText.substring(with: rawLineRange)
             let attributedPrefixRange = attributedNumberedPrefixRange(
                 in: rawLineRange,
                 textStorage: textStorage
@@ -2746,11 +2787,7 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
 
             guard case .numbered(let indentColumns, let number) = kind(at: line.index) else {
                 if let orphanedPrefixRange = line.prefixRange
-                    ?? attributedPrefixRange
-                    ?? generatedNumberedPrefixRange(
-                        in: rawLine,
-                        lineLocation: line.lineRange.location
-                    ) {
+                    ?? attributedPrefixRange {
                     edits.append((range: orphanedPrefixRange, replacement: ""))
                 }
                 continue
@@ -4028,6 +4065,10 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
 
     var selectedRangeForTesting: NSRange {
         textView.selectedRange()
+    }
+
+    var isTextEditorFirstResponderForTesting: Bool {
+        window?.firstResponder === textView
     }
 
     var selectedTextForTesting: String {
