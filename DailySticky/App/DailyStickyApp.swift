@@ -547,11 +547,11 @@ struct DailyStickyHelpView: View {
                 HelpSection(title: "Daily Pages") {
                     HelpLine(
                         "Move between days",
-                        detail: "Use the left and right arrow buttons in the header."
+                        detail: "Drag the date dial to move through days, or click a visible date to jump to it."
                     )
                     HelpLine(
                         "Back to today",
-                        detail: "A Today button appears only when you are viewing another date."
+                        detail: "When today moves off the dial, select the Today marker at the edge to return."
                     )
                     HelpLine(
                         "Pinned note",
@@ -567,7 +567,7 @@ struct DailyStickyHelpView: View {
                     )
                     HelpLine(
                         "Move through matches",
-                        detail: "Use the arrow buttons or press Return to move through matches. Escape clears the query first, then closes Find."
+                        detail: "Use the arrow buttons or press Return for the next match and Shift-Return for the previous match. Escape clears the query first, then closes Find."
                     )
                     HelpLine(
                         "Find text in images",
@@ -575,12 +575,16 @@ struct DailyStickyHelpView: View {
                     )
                     HelpLine(
                         "Go to any note",
-                        detail: "Press Cmd-P to search every day by note content or date. Use Up and Down, then Return to open a result.",
+                        detail: "Press Cmd-P to search every day by note content, recognized image text, or date. Use Up and Down, then Return to open a result.",
                         syntax: "Cmd-P"
                     )
                     HelpLine(
                         "Search by date",
-                        detail: "Type a date such as Aug 12. Go to Note supports fuzzy matching across Latin, Chinese, Japanese, and Korean text."
+                        detail: "Type a date such as Aug 12 or 12 Aug. Dates follow the language selected in Settings, and note text supports fuzzy matching across Latin and CJK text."
+                    )
+                    HelpLine(
+                        "Open the exact match",
+                        detail: "Opening a content result starts Find in that note and scrolls to the matching text. Use Return and Shift-Return for other matches."
                     )
                     HelpLine(
                         "Return to your day",
@@ -593,6 +597,7 @@ struct DailyStickyHelpView: View {
                     HelpLine("Italic", syntax: "*text*")
                     HelpLine("Headings", syntax: "#, ##, ###, ####")
                     HelpLine("Inline code", syntax: "`code`")
+                    HelpLine("Link", syntax: "[title](https://example.com)")
                     HelpLine("Strikethrough", syntax: "~~done~~")
                     HelpLine("Quote", syntax: "> text")
                     HelpLine("Divider", syntax: "---")
@@ -610,8 +615,8 @@ struct DailyStickyHelpView: View {
                         syntax: "- [x] task"
                     )
                     HelpLine(
-                        "Nested todos",
-                        detail: "Tab moves a task in one level. Shift-Tab moves it back out."
+                        "Nested lists",
+                        detail: "Tab moves a todo, bullet, or numbered item in one level. Shift-Tab moves it back out. With multiple lines selected, every selected line moves together."
                     )
                     HelpLine(
                         "Continue a list",
@@ -660,6 +665,10 @@ struct DailyStickyHelpView: View {
                         detail: "Type / on an empty line. Use Up and Down, then Return, or click an item."
                     )
                     HelpLine(
+                        "Filter commands",
+                        detail: "Keep typing after / to focus the closest command, such as /todo, /heading, /bullet, or /divider."
+                    )
+                    HelpLine(
                         "Todo list",
                         detail: "Choose Todo list or type /todo and press Return.",
                         syntax: "/todo"
@@ -703,6 +712,14 @@ struct DailyStickyHelpView: View {
                         "Resize an image",
                         detail: "Select the image, then drag the middle-right handle to change width."
                     )
+                    HelpLine(
+                        "Copy an image",
+                        detail: "Select the image and press Cmd-C, or right-click it and choose Copy."
+                    )
+                    HelpLine(
+                        "Select recognized text",
+                        detail: "Select an image, then drag across recognized text to copy only those characters. Use the text-recognition button to show or hide recognition boxes."
+                    )
                 }
 
                 HelpSection(title: "Tables and Code") {
@@ -721,12 +738,20 @@ struct DailyStickyHelpView: View {
                         detail: "Use fenced Markdown or type /code language. Example: /code swift.",
                         syntax: "```swift"
                     )
+                    HelpLine(
+                        "Change code language",
+                        detail: "Click the language chip in a code block to choose syntax highlighting or enter another Markdown language identifier."
+                    )
                 }
 
                 HelpSection(title: "Settings") {
                     HelpLine(
                         "Storage & Sync",
-                        detail: "Choose Local only to keep everything on this Mac, or Sync with iCloud to use the same notes on your Apple devices."
+                        detail: "Choose Local only to keep everything on this Mac, or Sync with iCloud to share notes, task states, and pasted images across Macs using the same iCloud account. Pinaday keeps a local offline copy either way."
+                    )
+                    HelpLine(
+                        "Language",
+                        detail: "Choose the app language in Settings. Dates, controls, Quick Start, and Help update immediately."
                     )
                     HelpLine(
                         "Theme",

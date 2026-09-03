@@ -33,6 +33,11 @@ struct DateTickerFlickPlan: Equatable {
     let targetRotation: CGFloat
 }
 
+struct DateTickerClickPlan: Equatable {
+    let days: Int
+    let duration: TimeInterval
+}
+
 enum DateTickerLayout {
     static let compactHeaderWidth: CGFloat = 400
     static let bandHeight: CGFloat = 40
@@ -51,6 +56,7 @@ enum DateTickerLayout {
     static let maximumFlickDays = 5
     static let todayTabWidth: CGFloat = 34
     static let clickSecondsPerDay = 0.14
+    static let todayReturnDuration = clickSecondsPerDay * 2
     static let springLambda: CGFloat = 0.18
     static let springStopThreshold: CGFloat = 0.05
     static let springFrameNanoseconds: UInt64 = 16_666_667
@@ -272,6 +278,40 @@ enum DateTickerLayout {
         return faces.min { lhs, rhs in
             abs(lhs.projection.x - targetX) < abs(rhs.projection.x - targetX)
         }?.offset ?? 0
+    }
+
+    static func clickPlan(
+        x: CGFloat,
+        width: CGFloat,
+        density: DateTickerDensity,
+        visualRotation: CGFloat,
+        todayEdge: DateTickerTodayEdge,
+        currentDayOffsetFromToday: Int
+    ) -> DateTickerClickPlan {
+        if todayEdge == .leading, x <= todayTabWidth {
+            return DateTickerClickPlan(
+                days: -currentDayOffsetFromToday,
+                duration: todayReturnDuration
+            )
+        }
+        if todayEdge == .trailing, x >= width - todayTabWidth {
+            return DateTickerClickPlan(
+                days: -currentDayOffsetFromToday,
+                duration: todayReturnDuration
+            )
+        }
+
+        let days = clickedDayOffset(
+            x: x,
+            width: width,
+            density: density,
+            visualRotation: visualRotation,
+            todayDayOffset: -currentDayOffsetFromToday
+        )
+        return DateTickerClickPlan(
+            days: days,
+            duration: clickAnimationDuration(navigatingBy: days)
+        )
     }
 
     static func visibleDayOffsets(
@@ -927,42 +967,28 @@ struct DateTickerView: View {
         todayEdge: DateTickerTodayEdge,
         visualRotation: CGFloat
     ) {
-        if todayEdge == .leading, x <= DateTickerLayout.todayTabWidth {
-            navigate(
-                by: -appState.currentDayOffsetFromToday,
-                fromVisualRotation: visualRotation
-            )
-            return
-        }
-        if todayEdge == .trailing, x >= width - DateTickerLayout.todayTabWidth {
-            navigate(
-                by: -appState.currentDayOffsetFromToday,
-                fromVisualRotation: visualRotation
-            )
-            return
-        }
-
         animateClickNavigation(
-            by: DateTickerLayout.clickedDayOffset(
+            DateTickerLayout.clickPlan(
                 x: x,
                 width: width,
                 density: density,
                 visualRotation: visualRotation,
-                todayDayOffset: -appState.currentDayOffsetFromToday
+                todayEdge: todayEdge,
+                currentDayOffsetFromToday: appState.currentDayOffsetFromToday
             ),
             fromVisualRotation: visualRotation
         )
     }
 
     private func animateClickNavigation(
-        by days: Int,
+        _ plan: DateTickerClickPlan,
         fromVisualRotation visualRotation: CGFloat
     ) {
         cancelNavigationAnimation()
 
-        guard days != 0,
+        guard plan.days != 0,
               let targetDateKey = appState.dateKey(
-                byAddingDays: days,
+                byAddingDays: plan.days,
                 to: appState.currentDateKey
               )
         else {
@@ -971,11 +997,9 @@ struct DateTickerView: View {
         }
 
         let targetRotation = DateTickerLayout.clickTargetRotation(
-            navigatingBy: days
+            navigatingBy: plan.days
         )
-        let duration = DateTickerLayout.clickAnimationDuration(
-            navigatingBy: days
-        )
+        let duration = plan.duration
         let animationID = UUID()
         navigationAnimationID = animationID
 

@@ -444,6 +444,102 @@ final class DateTickerTests: XCTestCase {
         XCTAssertEqual(oneDaySpeed, threeDaySpeed, accuracy: 0.001)
     }
 
+    func testTodayEdgeClicksUseFixedDurationWhileDateFacesKeepPerDayTiming() {
+        let width: CGFloat = 184
+
+        XCTAssertEqual(
+            DateTickerLayout.clickPlan(
+                x: 0,
+                width: width,
+                density: .numbersOnly,
+                visualRotation: 0,
+                todayEdge: .leading,
+                currentDayOffsetFromToday: 2
+            ),
+            DateTickerClickPlan(days: -2, duration: 0.28)
+        )
+        XCTAssertEqual(
+            DateTickerLayout.clickPlan(
+                x: width,
+                width: width,
+                density: .numbersOnly,
+                visualRotation: 0,
+                todayEdge: .trailing,
+                currentDayOffsetFromToday: -3
+            ),
+            DateTickerClickPlan(days: 3, duration: 0.28)
+        )
+
+        let nextFace = DateTickerLayout.projection(
+            forDayOffset: 1,
+            visualRotation: 0,
+            tickerWidth: width,
+            density: .numbersOnly
+        )
+        XCTAssertEqual(
+            DateTickerLayout.clickPlan(
+                x: width / 2 + nextFace.x,
+                width: width,
+                density: .numbersOnly,
+                visualRotation: 0,
+                todayEdge: .none,
+                currentDayOffsetFromToday: 0
+            ),
+            DateTickerClickPlan(days: 1, duration: 0.14)
+        )
+    }
+
+    func testTodayReturnSpeedScalesWithDistanceToKeepDurationConsistent() {
+        let width: CGFloat = 184
+        let nearPlan = DateTickerLayout.clickPlan(
+            x: 0,
+            width: width,
+            density: .numbersOnly,
+            visualRotation: 0,
+            todayEdge: .leading,
+            currentDayOffsetFromToday: 2
+        )
+        let farPlan = DateTickerLayout.clickPlan(
+            x: 0,
+            width: width,
+            density: .numbersOnly,
+            visualRotation: 0,
+            todayEdge: .leading,
+            currentDayOffsetFromToday: 20
+        )
+
+        XCTAssertEqual(nearPlan.duration, farPlan.duration, accuracy: 0.001)
+
+        let nearSpeed = abs(
+            DateTickerLayout.clickTargetRotation(navigatingBy: nearPlan.days)
+        ) / nearPlan.duration
+        let farSpeed = abs(
+            DateTickerLayout.clickTargetRotation(navigatingBy: farPlan.days)
+        ) / farPlan.duration
+        XCTAssertEqual(farSpeed, nearSpeed * 10, accuracy: 0.001)
+    }
+
+    func testTodayReturnFaceRotatesContinuouslyFromTheRimToCenter() {
+        let width: CGFloat = 184
+        let todayOffset = -2
+        let rotations: [CGFloat] = [0, -20, -40]
+        let projections = rotations.map { rotation in
+            DateTickerLayout.projection(
+                forDayOffset: todayOffset,
+                visualRotation: rotation,
+                tickerWidth: width,
+                density: .numbersOnly
+            )
+        }
+
+        XCTAssertLessThan(projections[0].x, projections[1].x)
+        XCTAssertLessThan(projections[1].x, projections[2].x)
+        XCTAssertLessThan(projections[0].scaleY, projections[1].scaleY)
+        XCTAssertLessThan(projections[1].scaleY, projections[2].scaleY)
+        XCTAssertEqual(projections[2].x, 0, accuracy: 0.001)
+        XCTAssertEqual(projections[2].angle, 0, accuracy: 0.001)
+    }
+
     func testTickerFaceIdentityFollowsItsDateAcrossNavigationCommit() {
         let targetBeforeCommit = DateTickerFacePlacement(
             id: "2026-08-26",

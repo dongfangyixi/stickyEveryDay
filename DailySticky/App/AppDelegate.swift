@@ -352,7 +352,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         quickStartSettings = settings
 
         let window = QuickStartWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 420, height: 314),
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 418),
             styleMask: [.borderless],
             backing: .buffered,
             defer: false
@@ -685,6 +685,7 @@ private struct PinadayQuickStartView: View {
             VStack(alignment: .leading, spacing: 10) {
                 QuickStartHeaderDemo()
                 QuickStartMarkdownDemo()
+                QuickStartImageDemo()
                 QuickStartSlashDemo()
             }
 
@@ -723,15 +724,12 @@ private struct QuickStartHeaderDemo: View {
 
         QuickStartInstructionRow(
             title: "Move through days",
-            detail: "Use the arrows to move between days. A Today button appears whenever you are viewing another date."
+            detail: "Drag the date dial to move through days, or click a visible date to jump to it."
         ) {
             HStack(spacing: 6) {
-                DemoIconButton(systemName: "chevron.left")
-                Text("Jul 9")
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
-                    .frame(minWidth: 48)
-                DemoIconButton(systemName: "chevron.right")
-                DemoTextButton(title: "Today")
+                DateTickerView()
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
                 DemoIconButton(systemName: "magnifyingglass")
                 DemoIconButton(systemName: "pin.fill", isActive: true)
             }
@@ -793,6 +791,21 @@ private struct QuickStartMarkdownDemo: View {
                 DemoCommandChip(title: "Heading", syntax: "#")
                 DemoCommandChip(title: "Todo", syntax: "- [ ]")
                 DemoCommandChip(title: "Divider", syntax: "---")
+            }
+        }
+    }
+}
+
+private struct QuickStartImageDemo: View {
+    var body: some View {
+        QuickStartInstructionRow(
+            title: "Paste images directly to the note.",
+            detail: "Paste with Cmd-V. Select an image and use Cmd-C to copy it, or drag over its automatically recognized text to copy the words."
+        ) {
+            HStack(spacing: 7) {
+                DemoImageAction(systemName: "photo", label: "\u{2318}V")
+                DemoImageAction(systemName: "doc.on.doc", label: "\u{2318}C")
+                DemoImageAction(systemName: "text.viewfinder", label: "OCR")
             }
         }
     }
@@ -895,26 +908,6 @@ private struct DemoIconButton: View {
     }
 }
 
-private struct DemoTextButton: View {
-    let title: String
-    @EnvironmentObject private var appState: AppState
-
-    var body: some View {
-        let palette = appState.themePalette
-
-        Text(appState.localized(title))
-            .lineLimit(1)
-        .font(.system(size: 11, weight: .semibold))
-        .foregroundStyle(palette.text)
-        .padding(.horizontal, 8)
-        .frame(height: 22)
-        .background(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(palette.controlBackground)
-        )
-    }
-}
-
 private struct DemoSlashKey: View {
     @EnvironmentObject private var appState: AppState
 
@@ -948,6 +941,30 @@ private struct DemoCommandChip: View {
         }
         .font(.system(size: 11, weight: .semibold))
         .padding(.horizontal, 7)
+        .frame(height: 22)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(palette.controlBackground)
+        )
+    }
+}
+
+private struct DemoImageAction: View {
+    let systemName: String
+    let label: String
+    @EnvironmentObject private var appState: AppState
+
+    var body: some View {
+        let palette = appState.themePalette
+
+        HStack(spacing: 5) {
+            Image(systemName: systemName)
+                .font(.system(size: 10, weight: .medium))
+            Text(label)
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+        }
+        .foregroundStyle(palette.text)
+        .padding(.horizontal, 8)
         .frame(height: 22)
         .background(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
