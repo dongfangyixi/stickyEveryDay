@@ -519,6 +519,30 @@ final class DateTickerTests: XCTestCase {
         XCTAssertEqual(farSpeed, nearSpeed * 10, accuracy: 0.001)
     }
 
+    func testHeaderIconControlsOnlyShowTheirBackgroundDuringInteraction() {
+        XCTAssertEqual(
+            TickerHeaderControlAppearance.backgroundOpacity(
+                isHovered: false,
+                isPressed: false
+            ),
+            0
+        )
+        XCTAssertEqual(
+            TickerHeaderControlAppearance.backgroundOpacity(
+                isHovered: true,
+                isPressed: false
+            ),
+            1
+        )
+        XCTAssertEqual(
+            TickerHeaderControlAppearance.backgroundOpacity(
+                isHovered: false,
+                isPressed: true
+            ),
+            1
+        )
+    }
+
     func testTodayReturnFaceRotatesContinuouslyFromTheRimToCenter() {
         let width: CGFloat = 184
         let todayOffset = -2

@@ -158,6 +158,32 @@ struct TickerHeaderControlButtonStyle: ButtonStyle {
     let cornerRadius: CGFloat
 
     func makeBody(configuration: Configuration) -> some View {
+        TickerHeaderControlButtonBody(
+            configuration: configuration,
+            background: background,
+            foreground: foreground,
+            size: size,
+            cornerRadius: cornerRadius
+        )
+    }
+}
+
+enum TickerHeaderControlAppearance {
+    static func backgroundOpacity(isHovered: Bool, isPressed: Bool) -> Double {
+        isHovered || isPressed ? 1 : 0
+    }
+}
+
+private struct TickerHeaderControlButtonBody: View {
+    let configuration: ButtonStyle.Configuration
+    let background: Color
+    let foreground: Color
+    let size: CGFloat
+    let cornerRadius: CGFloat
+
+    @State private var isHovered = false
+
+    var body: some View {
         configuration.label
             .font(.system(size: 15, weight: .medium))
             .foregroundStyle(foreground)
@@ -165,7 +191,14 @@ struct TickerHeaderControlButtonStyle: ButtonStyle {
             .background {
                 ZStack {
                     RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                        .fill(background)
+                        .fill(
+                            background.opacity(
+                                TickerHeaderControlAppearance.backgroundOpacity(
+                                    isHovered: isHovered,
+                                    isPressed: configuration.isPressed
+                                )
+                            )
+                        )
                     if configuration.isPressed {
                         RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                             .fill(foreground.opacity(0.10))
@@ -173,6 +206,8 @@ struct TickerHeaderControlButtonStyle: ButtonStyle {
                 }
             }
             .contentShape(Rectangle())
+            .onHover { isHovered = $0 }
+            .animation(.easeOut(duration: 0.12), value: isHovered)
     }
 }
 
