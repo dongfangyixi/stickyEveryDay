@@ -327,7 +327,7 @@ struct DailyNoteEditorView: View {
                     .fill(palette.paperInset.opacity(0.76))
             )
             .padding(.horizontal, 8)
-            .padding(.vertical, 10)
+            .padding(.bottom, 12)
         }
         .onAppear {
             updateFindDocument()
@@ -1585,7 +1585,7 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         textView.allowsDocumentBackgroundColorChange = false
         textView.font = baseFont
         textView.defaultParagraphStyle = baseParagraphStyle()
-        textView.textContainerInset = NSSize(width: 8, height: 10)
+        textView.textContainerInset = NSSize(width: 8, height: 8)
         textView.textContainer?.lineFragmentPadding = 0
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
