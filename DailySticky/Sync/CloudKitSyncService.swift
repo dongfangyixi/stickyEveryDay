@@ -4,7 +4,7 @@ import Foundation
 import Security
 
 final class CloudKitSyncService: CloudSyncServicing {
-    private enum Schema {
+    enum Schema {
         static let containerIdentifier = "iCloud.com.makeeverydaybetter.dailysticky"
         static let zoneName = "PinadayNotes"
         static let pageRecordType = "DayPage"
@@ -17,6 +17,20 @@ final class CloudKitSyncService: CloudSyncServicing {
         static let relativePath = "relativePath"
         static let file = "file"
     }
+
+    // Routine refreshes must omit the binary asset field. Asking CloudKit for
+    // it materializes another cached file even when the attachment exists locally.
+    static let remoteSnapshotDesiredKeys: [CKRecord.FieldKey] = [
+        Schema.dateKey,
+        Schema.noteText,
+        Schema.createdAt,
+        Schema.updatedAt,
+        Schema.relativePath
+    ]
+    static let attachmentAssetDesiredKeys: [CKRecord.FieldKey] = [
+        Schema.relativePath,
+        Schema.file
+    ]
 
     private let containerIdentifier: String
     private lazy var container = CKContainer(identifier: containerIdentifier)
@@ -87,7 +101,7 @@ final class CloudKitSyncService: CloudSyncServicing {
         }
 
         try await ensureZoneExists()
-        let remoteRecords = try await fetchAllRecords()
+        let remoteRecords = try await fetchAllRecordMetadata()
         let remotePages = try decodePages(from: remoteRecords)
         let merge = SyncMergeEngine.merge(
             localPages: localSnapshot.pages,
@@ -121,7 +135,19 @@ final class CloudKitSyncService: CloudSyncServicing {
             .map(attachmentRecord(for:))
 
         try await save(records: pageRecords + attachmentRecords)
-        try restoreMissingAttachments(from: remoteRecords, localSnapshot: localSnapshot)
+
+        let missingAttachmentRecordIDs = Self.attachmentRecordIDsToDownload(
+            from: remoteRecords,
+            localPaths: Set(localSnapshot.attachments.map(\.relativePath))
+        )
+        let missingAttachmentRecords = try await fetchRecords(
+            with: missingAttachmentRecordIDs,
+            desiredKeys: Self.attachmentAssetDesiredKeys
+        )
+        try restoreMissingAttachments(
+            from: missingAttachmentRecords,
+            localSnapshot: localSnapshot
+        )
 
         return CloudSyncResult(
             pages: merge.pages,
@@ -156,7 +182,7 @@ final class CloudKitSyncService: CloudSyncServicing {
         }
     }
 
-    private func fetchAllRecords() async throws -> [CKRecord] {
+    private func fetchAllRecordMetadata() async throws -> [CKRecord] {
         var records: [CKRecord] = []
         var changeToken: CKServerChangeToken?
         var moreComing = true
@@ -164,7 +190,8 @@ final class CloudKitSyncService: CloudSyncServicing {
         while moreComing {
             let response = try await database.recordZoneChanges(
                 inZoneWith: zoneID,
-                since: changeToken
+                since: changeToken,
+                desiredKeys: Self.remoteSnapshotDesiredKeys
             )
             for (_, result) in response.modificationResultsByID {
                 records.append(try result.get().record)
@@ -175,6 +202,44 @@ final class CloudKitSyncService: CloudSyncServicing {
 
         return records.filter {
             $0.recordType == Schema.pageRecordType || $0.recordType == Schema.attachmentRecordType
+        }
+    }
+
+    private func fetchRecords(
+        with recordIDs: [CKRecord.ID],
+        desiredKeys: [CKRecord.FieldKey]
+    ) async throws -> [CKRecord] {
+        guard !recordIDs.isEmpty else {
+            return []
+        }
+
+        var records: [CKRecord] = []
+        for batch in recordIDs.chunked(into: 200) {
+            let results = try await database.records(for: batch, desiredKeys: desiredKeys)
+            for recordID in batch {
+                guard let result = results[recordID] else {
+                    throw CloudSyncServiceError.partialFailure(
+                        "The iCloud record \(recordID.recordName) was not returned."
+                    )
+                }
+                records.append(try result.get())
+            }
+        }
+        return records
+    }
+
+    static func attachmentRecordIDsToDownload(
+        from records: [CKRecord],
+        localPaths: Set<String>
+    ) -> [CKRecord.ID] {
+        records.compactMap { record in
+            guard record.recordType == Schema.attachmentRecordType,
+                  let relativePath = record[Schema.relativePath] as? String,
+                  !localPaths.contains(relativePath)
+            else {
+                return nil
+            }
+            return record.recordID
         }
     }
 

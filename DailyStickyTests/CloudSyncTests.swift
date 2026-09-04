@@ -1,7 +1,52 @@
+import CloudKit
 import XCTest
 @testable import Pinaday
 
 final class CloudSyncTests: XCTestCase {
+    func testRemoteSnapshotFetchExcludesAttachmentAssetData() {
+        XCTAssertFalse(
+            CloudKitSyncService.remoteSnapshotDesiredKeys.contains(
+                CloudKitSyncService.Schema.file
+            ),
+            "Routine refreshes must not download every CKAsset again"
+        )
+        XCTAssertEqual(
+            Set(CloudKitSyncService.attachmentAssetDesiredKeys),
+            [
+                CloudKitSyncService.Schema.relativePath,
+                CloudKitSyncService.Schema.file
+            ]
+        )
+    }
+
+    func testOnlyMissingLocalAttachmentsAreScheduledForAssetDownload() {
+        let zoneID = CKRecordZone.ID(
+            zoneName: "PinadayNotes",
+            ownerName: CKCurrentUserDefaultName
+        )
+        let existingAttachment = cloudAttachmentRecord(
+            name: "attachment-existing",
+            relativePath: "attachments/2026-09-04/existing.png",
+            zoneID: zoneID
+        )
+        let missingAttachment = cloudAttachmentRecord(
+            name: "attachment-missing",
+            relativePath: "attachments/2026-09-04/missing.png",
+            zoneID: zoneID
+        )
+        let pageRecord = CKRecord(
+            recordType: CloudKitSyncService.Schema.pageRecordType,
+            recordID: CKRecord.ID(recordName: "page-2026-09-04", zoneID: zoneID)
+        )
+
+        let recordIDs = CloudKitSyncService.attachmentRecordIDsToDownload(
+            from: [existingAttachment, missingAttachment, pageRecord],
+            localPaths: ["attachments/2026-09-04/existing.png"]
+        )
+
+        XCTAssertEqual(recordIDs, [missingAttachment.recordID])
+    }
+
     func testStorageDefaultsToLocalOnlyAndRequiresAChoice() throws {
         let json = """
         {
@@ -338,6 +383,19 @@ final class CloudSyncTests: XCTestCase {
             createdAt: Date(timeIntervalSince1970: 0),
             updatedAt: Date(timeIntervalSince1970: updatedAt)
         )
+    }
+
+    private func cloudAttachmentRecord(
+        name: String,
+        relativePath: String,
+        zoneID: CKRecordZone.ID
+    ) -> CKRecord {
+        let record = CKRecord(
+            recordType: CloudKitSyncService.Schema.attachmentRecordType,
+            recordID: CKRecord.ID(recordName: name, zoneID: zoneID)
+        )
+        record[CloudKitSyncService.Schema.relativePath] = relativePath as CKRecordValue
+        return record
     }
 }
 
