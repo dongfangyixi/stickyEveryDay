@@ -1433,6 +1433,59 @@ final class CheckboxInteractionTests: XCTestCase {
         )
     }
 
+    func testSelectCurrentLineSelectsTheLogicalLineIncludingItsNewline() {
+        let (editor, _) = makeEditor()
+        editor.setText("alpha\nbeta\ngamma")
+        editor.selectRangeForTesting(NSRange(location: 8, length: 0))
+
+        editor.pressSelectCurrentLineShortcutForTesting()
+
+        XCTAssertEqual(editor.selectedTextForTesting, "beta\n")
+        XCTAssertEqual(editor.selectedRangeForTesting, NSRange(location: 6, length: 5))
+    }
+
+    func testSelectCurrentLineSelectsFinalLineWithoutTrailingNewline() {
+        let (editor, _) = makeEditor()
+        editor.setText("alpha\nbeta\ngamma")
+        editor.selectRangeForTesting(NSRange(location: 13, length: 0))
+
+        editor.selectCurrentLineForTesting()
+
+        XCTAssertEqual(editor.selectedTextForTesting, "gamma")
+        XCTAssertEqual(editor.selectedRangeForTesting, NSRange(location: 11, length: 5))
+    }
+
+    func testSelectCurrentLinePreservesStructuredMarkdownWhenCopied() throws {
+        let (editor, _) = makeEditor()
+        editor.setText("- [ ] first task\n1. numbered item\nplain")
+        let contentRange = try XCTUnwrap(editor.contentRangeForTesting(lineIndex: 0))
+        editor.selectRangeForTesting(NSRange(location: contentRange.location + 2, length: 0))
+
+        editor.selectCurrentLineForTesting()
+
+        XCTAssertEqual(editor.selectedTextForTesting, "first task\n")
+        XCTAssertEqual(editor.copySelectionForTesting(), "- [ ] first task")
+    }
+
+    func testSelectCurrentLineShortcutRequiresCommandLWithoutExtraModifiers() {
+        XCTAssertTrue(SelectCurrentLineShortcut.matches(
+            charactersIgnoringModifiers: "l",
+            modifierFlags: .command
+        ))
+        XCTAssertTrue(SelectCurrentLineShortcut.matches(
+            charactersIgnoringModifiers: "L",
+            modifierFlags: .command
+        ))
+        XCTAssertFalse(SelectCurrentLineShortcut.matches(
+            charactersIgnoringModifiers: "l",
+            modifierFlags: []
+        ))
+        XCTAssertFalse(SelectCurrentLineShortcut.matches(
+            charactersIgnoringModifiers: "l",
+            modifierFlags: [.command, .shift]
+        ))
+    }
+
     func testDeletingNumberedPrefixDoesNotDeleteItsContentOrStructure() throws {
         let (editor, _) = makeEditor()
         editor.setText("1. one")

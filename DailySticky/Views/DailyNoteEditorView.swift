@@ -1602,6 +1602,9 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         textView.selectAllHandler = { [weak self] in
             self?.selectAllTextInSelectedImage() ?? false
         }
+        textView.selectCurrentLineHandler = { [weak self] in
+            self?.selectCurrentLine() ?? false
+        }
         textView.cutHandler = { [weak self] in
             self?.cutSelectionToPasteboard() ?? false
         }
@@ -3305,6 +3308,18 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
         return imageInteractionView.selectAllText(in: selectedImageLineIndex)
     }
 
+    private func selectCurrentLine() -> Bool {
+        let selectedRange = textView.selectedRange()
+        guard let line = lineInfo(at: selectedRange.location) else {
+            return false
+        }
+
+        selectedImageLineIndex = nil
+        textView.setSelectedRange(line.lineRange)
+        textView.scrollRangeToVisible(line.lineRange)
+        return true
+    }
+
     private static func pngData(from image: NSImage) -> Data? {
         guard let tiffData = image.tiffRepresentation,
               let bitmap = NSBitmapImageRep(data: tiffData)
@@ -4032,6 +4047,30 @@ final class InlineTodoTextEditorContainer: NSView, NSTextViewDelegate {
 
     func selectAllForTesting() {
         textView.selectAll(nil)
+    }
+
+    func selectCurrentLineForTesting() {
+        _ = selectCurrentLine()
+    }
+
+    func pressSelectCurrentLineShortcutForTesting() {
+        guard let event = NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: .command,
+            timestamp: 0,
+            windowNumber: window?.windowNumber ?? 0,
+            context: nil,
+            characters: "l",
+            charactersIgnoringModifiers: "l",
+            isARepeat: false,
+            keyCode: 37
+        ) else {
+            assertionFailure("Could not create Cmd-L test event")
+            return
+        }
+
+        textView.keyDown(with: event)
     }
 
     func extendSelectionRightForTesting(from location: Int) {
@@ -7804,6 +7843,16 @@ struct EditorContextMenuAction {
     }
 }
 
+enum SelectCurrentLineShortcut {
+    static func matches(
+        charactersIgnoringModifiers: String?,
+        modifierFlags: NSEvent.ModifierFlags
+    ) -> Bool {
+        let modifiers = modifierFlags.intersection(.deviceIndependentFlagsMask)
+        return charactersIgnoringModifiers?.lowercased() == "l" && modifiers == .command
+    }
+}
+
 enum EditorContextMenuBuilder {
     static func addingPinadayActions(
         to nativeMenu: NSMenu,
@@ -7922,6 +7971,7 @@ private final class TodoTextView: NSTextView {
     var copyHandler: (() -> Bool)?
     var canCopyHandler: (() -> Bool)?
     var selectAllHandler: (() -> Bool)?
+    var selectCurrentLineHandler: (() -> Bool)?
     var cutHandler: (() -> Bool)?
     var pasteHandler: (() -> Bool)?
     var canPasteHandler: (() -> Bool)?
@@ -8072,6 +8122,13 @@ private final class TodoTextView: NSTextView {
 
         if character == "a", flags.contains(.command) {
             selectAll(nil)
+            return
+        }
+
+        if SelectCurrentLineShortcut.matches(
+            charactersIgnoringModifiers: character,
+            modifierFlags: flags
+        ), selectCurrentLineHandler?() == true {
             return
         }
 
