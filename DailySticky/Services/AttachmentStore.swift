@@ -1,14 +1,58 @@
-import AppKit
 import Foundation
+import ImageIO
+
+#if os(macOS)
+import AppKit
+#elseif os(iOS)
+import UIKit
+#endif
 
 enum AttachmentStore {
     private static let appDirectoryName = "DailySticky"
 
+#if os(macOS)
     static func savePastedImage(_ image: NSImage, dateKey: String) throws -> String {
         guard let pngData = pngData(from: image) else {
             throw AttachmentStoreError.couldNotEncodeImage
         }
 
+        return try savePNGData(pngData, dateKey: dateKey)
+    }
+#elseif os(iOS)
+    static func savePastedImage(_ image: UIImage, dateKey: String) throws -> String {
+        guard let pngData = image.pngData() else {
+            throw AttachmentStoreError.couldNotEncodeImage
+        }
+
+        return try savePNGData(pngData, dateKey: dateKey)
+    }
+#endif
+
+    static func saveImageData(_ data: Data, dateKey: String) throws -> String {
+        guard let imageSource = CGImageSourceCreateWithData(data as CFData, nil),
+              let image = CGImageSourceCreateImageAtIndex(imageSource, 0, nil)
+        else {
+            throw AttachmentStoreError.couldNotEncodeImage
+        }
+
+        let mutableData = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(
+            mutableData,
+            "public.png" as CFString,
+            1,
+            nil
+        ) else {
+            throw AttachmentStoreError.couldNotEncodeImage
+        }
+        CGImageDestinationAddImage(destination, image, nil)
+        guard CGImageDestinationFinalize(destination) else {
+            throw AttachmentStoreError.couldNotEncodeImage
+        }
+
+        return try savePNGData(mutableData as Data, dateKey: dateKey)
+    }
+
+    private static func savePNGData(_ pngData: Data, dateKey: String) throws -> String {
         let folderPath = "attachments/\(dateKey)"
         let directoryURL = try appSupportDirectory()
             .appendingPathComponent(folderPath, isDirectory: true)
@@ -101,6 +145,7 @@ enum AttachmentStore {
         return applicationSupportURL.appendingPathComponent(appDirectoryName, isDirectory: true)
     }
 
+#if os(macOS)
     private static func pngData(from image: NSImage) -> Data? {
         guard let tiffData = image.tiffRepresentation,
               let bitmap = NSBitmapImageRep(data: tiffData)
@@ -110,6 +155,7 @@ enum AttachmentStore {
 
         return bitmap.representation(using: .png, properties: [:])
     }
+#endif
 }
 
 enum AttachmentStoreError: LocalizedError {

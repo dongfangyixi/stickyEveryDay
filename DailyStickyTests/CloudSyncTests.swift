@@ -1,7 +1,129 @@
+import CloudKit
 import XCTest
 @testable import Pinaday
 
 final class CloudSyncTests: XCTestCase {
+    func testRemoteSnapshotFetchExcludesAttachmentAssetData() {
+        XCTAssertFalse(
+            CloudKitSyncService.remoteSnapshotDesiredKeys.contains(
+                CloudKitSyncService.Schema.file
+            ),
+            "Routine refreshes must not download every CKAsset again"
+        )
+        XCTAssertTrue(
+            CloudKitSyncService.remoteSnapshotDesiredKeys.contains(
+                CloudKitSyncService.Schema.relativePath
+            )
+        )
+        XCTAssertEqual(
+            Set(CloudKitSyncService.attachmentAssetDesiredKeys),
+            [
+                CloudKitSyncService.Schema.relativePath,
+                CloudKitSyncService.Schema.file
+            ]
+        )
+        XCTAssertEqual(CloudKitSyncService.attachmentFetchBatchSize, 200)
+    }
+
+    func testOnlyMissingLocalAttachmentsAreScheduledForAssetDownload() {
+        let zoneID = cloudZoneID()
+        let existingAttachment = cloudAttachmentRecord(
+            name: "attachment-existing",
+            relativePath: "attachments/2026-09-04/existing.png",
+            zoneID: zoneID
+        )
+        let missingAttachment = cloudAttachmentRecord(
+            name: "attachment-missing",
+            relativePath: "attachments/2026-09-04/missing.png",
+            zoneID: zoneID
+        )
+        let pageRecord = CKRecord(
+            recordType: CloudKitSyncService.Schema.pageRecordType,
+            recordID: CKRecord.ID(recordName: "page-2026-09-04", zoneID: zoneID)
+        )
+
+        let recordIDs = CloudKitSyncService.attachmentRecordIDsToDownload(
+            from: [existingAttachment, missingAttachment, pageRecord],
+            localPaths: ["attachments/2026-09-04/existing.png"]
+        )
+
+        XCTAssertEqual(recordIDs, [missingAttachment.recordID])
+    }
+
+    func testStaleAttachmentSnapshotDoesNotSuppressDownload() throws {
+        let missingURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pinaday-deleted-\(UUID().uuidString).png")
+        let staleAttachment = CloudAttachment(
+            relativePath: "attachments/2026-09-04/deleted.png",
+            fileURL: missingURL,
+            modifiedAt: .distantPast
+        )
+
+        let existing = CloudKitSyncService.existingLocalAttachments(in: [staleAttachment])
+        let remoteRecord = cloudAttachmentRecord(
+            name: "attachment-deleted",
+            relativePath: staleAttachment.relativePath,
+            zoneID: cloudZoneID()
+        )
+        let recordIDs = CloudKitSyncService.attachmentRecordIDsToDownload(
+            from: [remoteRecord],
+            localPaths: Set(existing.map(\.relativePath))
+        )
+
+        XCTAssertTrue(existing.isEmpty)
+        XCTAssertEqual(recordIDs, [remoteRecord.recordID])
+    }
+
+    func testAttachmentUploadRecordRestoresOnSecondDeviceSnapshot() throws {
+        let fileManager = FileManager.default
+        let testID = UUID().uuidString
+        let temporaryDirectory = fileManager.temporaryDirectory
+            .appendingPathComponent("pinaday-cloud-round-trip-\(testID)", isDirectory: true)
+        let sourceURL = temporaryDirectory.appendingPathComponent("source.bin")
+        let cloudAssetURL = temporaryDirectory.appendingPathComponent("cloud-asset.bin")
+        let relativePath = "attachments/cloud-round-trip-\(testID)/image.bin"
+        let payload = Data("attachment from device A".utf8)
+        try fileManager.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
+        try payload.write(to: sourceURL)
+
+        let destinationURL = try XCTUnwrap(AttachmentStore.imageURL(for: relativePath))
+        defer {
+            try? fileManager.removeItem(at: temporaryDirectory)
+            try? fileManager.removeItem(at: destinationURL.deletingLastPathComponent())
+        }
+
+        let deviceAAttachment = CloudAttachment(
+            relativePath: relativePath,
+            fileURL: sourceURL,
+            modifiedAt: Date()
+        )
+        let uploadRecord = CloudKitSyncService().attachmentRecord(for: deviceAAttachment)
+        let uploadAsset = try XCTUnwrap(
+            uploadRecord[CloudKitSyncService.Schema.file] as? CKAsset
+        )
+        let uploadAssetURL = try XCTUnwrap(uploadAsset.fileURL)
+        XCTAssertEqual(try Data(contentsOf: uploadAssetURL), payload)
+
+        try fileManager.copyItem(at: uploadAssetURL, to: cloudAssetURL)
+        try fileManager.removeItem(at: sourceURL)
+        uploadRecord[CloudKitSyncService.Schema.file] = CKAsset(fileURL: cloudAssetURL)
+
+        let deviceBExisting = CloudKitSyncService.existingLocalAttachments(
+            in: [deviceAAttachment]
+        )
+        let missingRecordIDs = CloudKitSyncService.attachmentRecordIDsToDownload(
+            from: [uploadRecord],
+            localPaths: Set(deviceBExisting.map(\.relativePath))
+        )
+        XCTAssertEqual(missingRecordIDs, [uploadRecord.recordID])
+
+        try CloudKitSyncService.restoreMissingAttachments(
+            from: [uploadRecord],
+            localPaths: []
+        )
+        XCTAssertEqual(try Data(contentsOf: destinationURL), payload)
+    }
+
     func testStorageDefaultsToLocalOnlyAndRequiresAChoice() throws {
         let json = """
         {
@@ -338,6 +460,26 @@ final class CloudSyncTests: XCTestCase {
             createdAt: Date(timeIntervalSince1970: 0),
             updatedAt: Date(timeIntervalSince1970: updatedAt)
         )
+    }
+
+    private func cloudZoneID() -> CKRecordZone.ID {
+        CKRecordZone.ID(
+            zoneName: CloudKitSyncService.Schema.zoneName,
+            ownerName: CKCurrentUserDefaultName
+        )
+    }
+
+    private func cloudAttachmentRecord(
+        name: String,
+        relativePath: String,
+        zoneID: CKRecordZone.ID
+    ) -> CKRecord {
+        let record = CKRecord(
+            recordType: CloudKitSyncService.Schema.attachmentRecordType,
+            recordID: CKRecord.ID(recordName: name, zoneID: zoneID)
+        )
+        record[CloudKitSyncService.Schema.relativePath] = relativePath as CKRecordValue
+        return record
     }
 }
 
