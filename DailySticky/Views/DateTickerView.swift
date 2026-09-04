@@ -852,38 +852,66 @@ struct DateTickerView: View {
                 alignment: .firstTextBaseline,
                 spacing: 4
             ) {
-                Text(content.weekday)
-                    .font(.system(
-                        size: density == .numbersOnly ? 8 : 8.5,
-                        weight: .medium,
-                        design: .monospaced
-                    ))
-                    .foregroundStyle(isToday ? tickerTheme.accent : tickerTheme.dim)
-                    .opacity(isSelected ? 1 : 0.72)
-                    .fixedSize(horizontal: true, vertical: false)
-
-                Text(content.day)
-                    .font(.system(
-                        size: density == .numbersOnly ? 14 : 15,
-                        weight: isSelected ? .bold : .medium,
-                        design: .monospaced
-                    ))
-                    .foregroundStyle(isToday ? tickerTheme.accent : tickerTheme.text)
-                    .fixedSize(horizontal: true, vertical: false)
-
-                Text(content.month)
-                    .font(.system(
-                        size: density == .numbersOnly ? 8 : 8.5,
-                        weight: .medium,
-                        design: .monospaced
-                    ))
-                    .foregroundStyle(isToday ? tickerTheme.accent : tickerTheme.dim)
-                    .opacity(isSelected ? 1 : 0.72)
-                    .fixedSize(horizontal: true, vertical: false)
+                if content.order == .monthDayWeekday {
+                    tickerMonth(content.month, isSelected: isSelected, isToday: isToday)
+                    tickerDay(content.day, isSelected: isSelected, isToday: isToday)
+                    tickerWeekday(content.weekday, isSelected: isSelected, isToday: isToday)
+                } else {
+                    tickerWeekday(content.weekday, isSelected: isSelected, isToday: isToday)
+                    tickerDay(content.day, isSelected: isSelected, isToday: isToday)
+                    tickerMonth(content.month, isSelected: isSelected, isToday: isToday)
+                }
             }
             .lineLimit(1)
             .fixedSize(horizontal: true, vertical: false)
         }
+    }
+
+    private func tickerWeekday(
+        _ weekday: String,
+        isSelected: Bool,
+        isToday: Bool
+    ) -> some View {
+        Text(weekday)
+            .font(.system(
+                size: density == .numbersOnly ? 8 : 8.5,
+                weight: .medium,
+                design: .monospaced
+            ))
+            .foregroundStyle(isToday ? tickerTheme.accent : tickerTheme.dim)
+            .opacity(isSelected ? 1 : 0.72)
+            .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private func tickerDay(
+        _ day: String,
+        isSelected: Bool,
+        isToday: Bool
+    ) -> some View {
+        Text(day)
+            .font(.system(
+                size: density == .numbersOnly ? 14 : 15,
+                weight: isSelected ? .bold : .medium,
+                design: .monospaced
+            ))
+            .foregroundStyle(isToday ? tickerTheme.accent : tickerTheme.text)
+            .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private func tickerMonth(
+        _ month: String,
+        isSelected: Bool,
+        isToday: Bool
+    ) -> some View {
+        Text(month)
+            .font(.system(
+                size: density == .numbersOnly ? 8 : 8.5,
+                weight: .medium,
+                design: .monospaced
+            ))
+            .foregroundStyle(isToday ? tickerTheme.accent : tickerTheme.dim)
+            .opacity(isSelected ? 1 : 0.72)
+            .fixedSize(horizontal: true, vertical: false)
     }
 
     private func todayTab(edge: DateTickerTodayEdge) -> some View {

@@ -98,6 +98,7 @@ struct PinadayAboutView: View {
     @EnvironmentObject private var appState: AppState
 
     private let feedbackEmail = "xuluthebest@gmail.com"
+    private let privacyPolicyURL = URL(string: "https://xuluthebest.com/pinaday/privacy/")!
 
     var body: some View {
         let palette = appState.themePalette
@@ -147,6 +148,11 @@ struct PinadayAboutView: View {
                         .foregroundStyle(palette.secondaryText)
                         .textSelection(.enabled)
                 }
+
+                Link(destination: privacyPolicyURL) {
+                    Label(appState.localized("Privacy Policy"), systemImage: "hand.raised")
+                }
+                .buttonStyle(.link)
             }
 
             Spacer(minLength: 0)

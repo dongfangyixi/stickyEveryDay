@@ -1,10 +1,30 @@
 import Foundation
 
+enum DateTickerFaceOrder: Equatable {
+    case weekdayDayMonth
+    case monthDayWeekday
+}
+
 struct DateTickerFaceContent: Equatable {
     let weekday: String
     let day: String
     let month: String
+    let order: DateTickerFaceOrder
     let accessibilityTitle: String
+
+    init(
+        weekday: String,
+        day: String,
+        month: String,
+        order: DateTickerFaceOrder = .weekdayDayMonth,
+        accessibilityTitle: String
+    ) {
+        self.weekday = weekday
+        self.day = day
+        self.month = month
+        self.order = order
+        self.accessibilityTitle = accessibilityTitle
+    }
 }
 
 final class DateKeyService {
@@ -17,7 +37,7 @@ final class DateKeyService {
     private let shortDisplayDateFormatter: DateFormatter
     private let accessibleShortDisplayDateFormatter: DateFormatter
     private let tickerWeekdayFormatter: DateFormatter
-    private let tickerDayFormatter: DateFormatter
+    private let tickerDayFormatter: NumberFormatter
     private let tickerMonthFormatter: DateFormatter
 
     init(
@@ -76,11 +96,10 @@ final class DateKeyService {
         tickerWeekdayFormatter.setLocalizedDateFormatFromTemplate("EEE")
         self.tickerWeekdayFormatter = tickerWeekdayFormatter
 
-        let tickerDayFormatter = DateFormatter()
-        tickerDayFormatter.calendar = calendar
+        let tickerDayFormatter = NumberFormatter()
         tickerDayFormatter.locale = self.locale
-        tickerDayFormatter.timeZone = calendar.timeZone
-        tickerDayFormatter.setLocalizedDateFormatFromTemplate("d")
+        tickerDayFormatter.numberStyle = .none
+        tickerDayFormatter.usesGroupingSeparator = false
         self.tickerDayFormatter = tickerDayFormatter
 
         let tickerMonthFormatter = DateFormatter()
@@ -111,7 +130,6 @@ final class DateKeyService {
         tickerWeekdayFormatter.locale = normalizedLocale
         tickerWeekdayFormatter.setLocalizedDateFormatFromTemplate("EEE")
         tickerDayFormatter.locale = normalizedLocale
-        tickerDayFormatter.setLocalizedDateFormatFromTemplate("d")
         tickerMonthFormatter.locale = normalizedLocale
         tickerMonthFormatter.setLocalizedDateFormatFromTemplate("MMM")
     }
@@ -214,11 +232,24 @@ final class DateKeyService {
             return nil
         }
 
+        let dayNumber = calendar.component(.day, from: date)
+
         return DateTickerFaceContent(
             weekday: tickerWeekdayFormatter.string(from: date).uppercased(with: locale),
-            day: tickerDayFormatter.string(from: date),
+            day: tickerDayFormatter.string(from: NSNumber(value: dayNumber))
+                ?? String(dayNumber),
             month: tickerMonthFormatter.string(from: date).uppercased(with: locale),
+            order: Self.tickerFaceOrder(for: locale),
             accessibilityTitle: displayDateFormatter.string(from: date)
         )
+    }
+
+    private static func tickerFaceOrder(for locale: Locale) -> DateTickerFaceOrder {
+        switch locale.language.languageCode?.identifier {
+        case "zh", "ja", "ko":
+            return .monthDayWeekday
+        default:
+            return .weekdayDayMonth
+        }
     }
 }

@@ -715,4 +715,61 @@ final class DateTickerTests: XCTestCase {
         XCTAssertEqual(english.dayOffset(from: "2026-08-31", to: "2026-09-02"), 2)
         XCTAssertTrue(chinese.tickerFaceContent(for: "2026-08-25")?.month.contains("8") == true)
     }
+
+    func testTickerDayIsBareNumberInEastAsianLocales() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+
+        let expectedComponents = [
+            "zh_Hans_CN": (month: "9月", weekday: "周四"),
+            "ja_JP": (month: "9月", weekday: "木"),
+            "ko_KR": (month: "9월", weekday: "목")
+        ]
+
+        for (localeIdentifier, expected) in expectedComponents {
+            let service = DateKeyService(
+                calendar: calendar,
+                locale: Locale(identifier: localeIdentifier)
+            )
+            let content = service.tickerFaceContent(for: "2026-09-03")
+
+            XCTAssertEqual(
+                content?.day,
+                "3",
+                "Dial faces must not add a day suffix for \(localeIdentifier)"
+            )
+            XCTAssertEqual(content?.month, expected.month)
+            XCTAssertEqual(content?.weekday, expected.weekday)
+            XCTAssertEqual(content?.order, .monthDayWeekday)
+        }
+    }
+
+    func testWesternTickerFacesKeepWeekdayDayMonthOrder() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+
+        for localeIdentifier in ["en_US", "fr_FR", "es_ES", "de_DE", "pt_BR"] {
+            let service = DateKeyService(
+                calendar: calendar,
+                locale: Locale(identifier: localeIdentifier)
+            )
+
+            XCTAssertEqual(
+                service.tickerFaceContent(for: "2026-09-03")?.order,
+                .weekdayDayMonth
+            )
+        }
+    }
+
+    func testTickerDayRemainsBareNumberAfterLocaleChange() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let service = DateKeyService(calendar: calendar, locale: Locale(identifier: "en_US"))
+
+        service.updateLocale(Locale(identifier: "ja_JP"))
+
+        let content = service.tickerFaceContent(for: "2026-09-03")
+        XCTAssertEqual(content?.day, "3")
+        XCTAssertEqual(content?.order, .monthDayWeekday)
+    }
 }
